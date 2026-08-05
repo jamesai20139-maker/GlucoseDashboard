@@ -3,7 +3,7 @@ use chrono::Utc;
 use serde::Serialize;
 
 use super::router::ApiState;
-use crate::{config::store::ConfigStore, errors::AppError, ingestion::sync_service::SyncService};
+use crate::{errors::AppError, ingestion::sync_service::SyncService};
 
 #[derive(Serialize)]
 pub struct SyncResponse {
@@ -16,6 +16,8 @@ pub struct SyncResponse {
 pub async fn sync(State(state): State<ApiState>) -> Result<Json<SyncResponse>, AppError> {
     let config = state.config.load();
     let service = SyncService {
+        sheet_id: config.sheet_id.clone(),
+        sheet_name: config.sheet_name.clone(),
         fixture_path: config.fixture_path.clone().map(Into::into),
     };
     let (records, issues) = service.load()?;

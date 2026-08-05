@@ -1,4 +1,29 @@
-import type { DashboardResponse } from '../types';
+import type { ConfigStatus, DashboardResponse } from '../types';
+
+export interface ConfigurePayload {
+  sheet_id: string;
+  sheet_name?: string;
+  fixture_path?: string;
+}
+
+export async function getConfigStatus(): Promise<ConfigStatus> {
+  const response = await fetch('/api/config/status');
+  if (!response.ok) throw new Error('無法讀取設定狀態');
+  return response.json() as Promise<ConfigStatus>;
+}
+
+export async function configureDashboard(payload: ConfigurePayload): Promise<ConfigStatus> {
+  const response = await fetch('/api/configure', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || '儲存 Google Sheet 設定失敗');
+  }
+  return getConfigStatus();
+}
 
 export async function getDashboard(period = 'all', event?: string, search?: string): Promise<DashboardResponse> {
   const params = new URLSearchParams({ period });

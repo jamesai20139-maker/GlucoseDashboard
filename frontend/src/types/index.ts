@@ -29,3 +29,13 @@ export interface DashboardResponse {
   status: string;
   last_successful_sync_at: string | null;
 }
+
+export interface ConfigStatus {
+  configured: boolean;
+  credential_store: string;
+  schema_version: number;
+  sheet_id: string | null;
+  sheet_name: string | null;
+  fixture_path: string | null;
+  last_successful_sync_at: string | null;
+}

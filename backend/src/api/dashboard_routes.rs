@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use super::router::ApiState;
 use crate::{
     analysis::{selection, summary},
-    config::store::ConfigStore,
     domain::{AnalysisSelection, Event, GlucoseRecord, Period},
     errors::AppError,
     ingestion::sync_service::SyncService,
@@ -62,6 +61,8 @@ fn load_records(
 > {
     let config = state.config.load();
     let service = SyncService {
+        sheet_id: config.sheet_id.clone(),
+        sheet_name: config.sheet_name.clone(),
         fixture_path: config.fixture_path.map(Into::into),
     };
     let (records, issues) = service.load()?;

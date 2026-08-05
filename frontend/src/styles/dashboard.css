@@ -10,6 +10,27 @@ button { cursor: pointer; border: 0; }
 .brand b { display: block; font-size: 24px; }.brand small { color: #284a8e; font-size: 15px; }
 .side-section { margin-top: 18px; padding: 14px; border: 1px solid #d6e1f0; border-radius: 22px; background: #fff; }
 .side-section h3 { margin: 0 0 12px; font-size: 18px; }.periods { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }.periods button { padding: 9px; border: 1px solid #d4ddec; border-radius: 12px; color: #172b58; background: #f8faff; }.periods button.active, .chart-period button.active { color: #fff; background: #1554ee; }
+.setup-card { border-color: #8db4ff; background: linear-gradient(180deg, #f5f9ff 0%, #ffffff 100%); }
+.status-banner { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; padding: 10px 12px; border-radius: 14px; background: #e8f1ff; color: #17376f; }
+.status-banner strong { font-size: 15px; }
+.status-banner span { font-size: 12px; color: #4e648b; }
+.inline-error { margin: 0 0 12px; color: #ab2638; font-size: 13px; }
+.sheet-form { display: grid; gap: 10px; }
+.sheet-form label { display: grid; gap: 6px; font-size: 13px; font-weight: 700; color: #203760; }
+.sheet-form input { width: 100%; padding: 10px 12px; border: 1px solid #cbd7ea; border-radius: 12px; color: #172b58; background: #fff; }
+.sheet-form input:focus { outline: 2px solid #8db4ff; outline-offset: 1px; }
+.form-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.form-actions button { padding: 10px 12px; border: 1px solid #cbd7ea; border-radius: 12px; background: #fff; color: #172b58; font-weight: 700; }
+.form-actions button:first-child { color: #fff; background: #1554ee; border-color: #1554ee; }
+.form-actions button:disabled { opacity: .6; cursor: not-allowed; }
+.form-hint { margin: 0; font-size: 12px; line-height: 1.6; color: #5a6b87; }
+.config-meta { display: grid; gap: 10px; margin-top: 12px; padding: 12px; border-radius: 16px; background: #edf5ff; }
+.config-meta p { display: flex; justify-content: space-between; gap: 12px; margin: 0; font-size: 12px; color: #203760; }
+.config-meta span { color: #5a6b87; }
+.config-meta strong { text-align: right; font-weight: 700; word-break: break-all; }
+.step-list, .note-list { margin: 0; padding-left: 20px; line-height: 1.7; color: #203760; font-size: 13px; }
+.step-list li + li, .note-list li + li { margin-top: 8px; }
+.guidance-card { background: #fbfdff; }
 .date-label { display: block; margin-top: 16px; font-weight: 700; }.date-label input { width: 100%; margin-top: 8px; padding: 11px; border: 1px solid #cbd7ea; border-radius: 12px; color: #172b58; }
 .refresh { width: 100%; margin-top: 16px; padding: 11px; border-radius: 12px; color: #fff; background: #1554ee; font-weight: 700; }.sync-status { margin: 12px 0 0; font-size: 13px; }.sync-status i { display: inline-block; width: 10px; height: 10px; margin-right: 4px; border-radius: 50%; background: #41b966; }
 .radio-row { display: block; padding: 8px 12px; border-radius: 12px; font-weight: 600; }.radio-row.selected { color: #123ea9; background: #e5efff; }.radio-row input { margin-right: 10px; accent-color: #1554ee; }

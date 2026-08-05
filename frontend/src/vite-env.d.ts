@@ -8,6 +8,7 @@ declare module 'react' {
   export function useCallback<T extends (...args: any[]) => any>(callback: T, deps: unknown[]): T;
   export function useEffect(effect: () => void | (() => void), deps?: unknown[]): void;
   export function useMemo<T>(factory: () => T, deps: unknown[]): T;
+  export function useRef<T>(initialValue: T): { current: T };
   export function useState<T>(initialValue: T): [T, (value: T) => void];
 }
 
