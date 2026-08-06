@@ -31,13 +31,10 @@ pub struct ConnectionReport {
 
 impl SyncService {
     pub async fn load(&self) -> Result<(Vec<GlucoseRecord>, Vec<DataQualityIssue>), AppError> {
-        let text = if let Some(path) = self.fixture_path.clone() {
-            std::fs::read_to_string(path).map_err(|_| AppError::Sync("無法讀取資料來源。".into()))?
-        } else {
-            let sheet_id = self
-                .sheet_id
-                .clone()
-                .ok_or_else(|| AppError::NotConfigured("尚未設定 Google Sheet。".into()))?;
+        // Google Sheet 為唯一正式資料來源：一旦設定 sheet_id 就一律直讀 Sheet，
+        // fixture_path 僅在尚未設定 Sheet 時作為開發/離線回退使用。
+        let text = if self.sheet_id.as_ref().map(|id| !id.trim().is_empty()).unwrap_or(false) {
+            let sheet_id = self.sheet_id.clone().unwrap();
             let sheet_gid = self.sheet_gid.clone();
             let sheet_name = self.sheet_name.clone().unwrap_or_else(|| "Sheet1".into());
             let response = fetch_google_sheet_csv(&sheet_id, sheet_gid.as_deref(), &sheet_name).await?;
@@ -45,6 +42,10 @@ impl SyncService {
                 return Err(AppError::Sync(response.message));
             }
             response.body
+        } else if let Some(path) = self.fixture_path.clone() {
+            std::fs::read_to_string(path).map_err(|_| AppError::Sync("無法讀取資料來源。".into()))?
+        } else {
+            return Err(AppError::NotConfigured("尚未設定 Google Sheet。".into()));
         };
         Ok(parse_csv(&text))
     }
