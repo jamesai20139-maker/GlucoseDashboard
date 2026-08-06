@@ -104,7 +104,9 @@ export default function App() {
     '真實 Google Sheet 建議只給讀取權限，避免把可寫入的分享權限交給不必要的人。',
   ], []);
 
-  const sidebar = <>
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const settingsPanel = <>
     <section className="side-section setup-card">
       <h3>⚙　Google Sheet 設定</h3>
       <div className="status-banner">
@@ -145,6 +147,9 @@ export default function App() {
         {notes.map((note) => <li key={note}>{note}</li>)}
       </ul>
     </section>
+  </>;
+
+  const sidebar = <>
     <section className="side-section">
       <h3>▣　時間區間</h3>
       <div className="periods">{[['all', '日'], ['week', '週'], ['month', '月'], ['quarter', '季']].map(([key, label]) => <button key={key} className={period === key ? 'active' : ''} type="button" onClick={() => setPeriod(key)}>{label}</button>)}</div>
@@ -167,9 +172,9 @@ export default function App() {
   const content = useMemo(() => {
     if (loading || configLoading) return <div className="state-card">正在讀取血糖資料與設定…</div>;
     if (error) return <div className="state-card error-state"><h2>同步失敗</h2><p>{error}</p><button type="button" onClick={() => void reload()}>重新嘗試</button></div>;
-    if (!data) return <div className="state-card"><h2>尚未設定資料來源</h2><p>請先填寫左側的 Google Sheet 設定，再按「儲存設定」與「立即更新」。</p></div>;
+    if (!data) return <div className="state-card"><h2>尚未設定資料來源</h2><p>請先按右上角「設定」按鈕填寫 Google Sheet 設定，再按「儲存設定」與「立即更新」。</p></div>;
     return <><SummaryCards summary={data.summary} /><GlucoseTrendChart records={data.records} /><GlucoseRecordTable rows={data.table_rows} search={search} onSearch={setSearch} onExport={() => { window.location.href = exportUrl(period, event || undefined, search || undefined); }} /></>;
   }, [configLoading, data, error, event, loading, period, reload, search]);
 
-  return <DashboardLayout sidebar={sidebar}>{content}</DashboardLayout>;
+  return <DashboardLayout sidebar={sidebar} onOpenSettings={() => setSettingsOpen(true)}>{content}{settingsOpen ? <div className="settings-overlay" role="dialog" aria-modal="true" aria-label="設定"><div className="settings-modal"><div className="settings-modal-header"><h2>⚙　設定</h2><button className="settings-close" type="button" aria-label="關閉" onClick={() => setSettingsOpen(false)}>✕</button></div><div className="settings-modal-body">{settingsPanel}</div></div></div> : null}</DashboardLayout>;
 }
