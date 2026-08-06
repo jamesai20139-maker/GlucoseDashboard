@@ -1,6 +1,6 @@
 use chrono::{DateTime, NaiveDateTime, Utc};
 
-use crate::domain::{DataQualityIssue, Event, GlucoseRecord, IssueCode, IssueSeverity};
+use crate::domain::{DashboardTableRow, DataQualityIssue, Event, GlucoseRecord, IssueCode, IssueSeverity};
 
 pub const HEADERS: [&str; 5] = [
     "血糖量測日期時間",
@@ -26,12 +26,23 @@ pub fn parse_date(value: &str) -> Option<DateTime<Utc>> {
         .map(|value| DateTime::<Utc>::from_naive_utc_and_offset(value, Utc))
 }
 
+/// 判斷血糖值是否有效（整數且在 20–600）。
+fn valid_glucose(raw: &str) -> Option<i32> {
+    let glucose = raw.trim().parse::<i32>().ok()?;
+    if (20..=600).contains(&glucose) {
+        Some(glucose)
+    } else {
+        None
+    }
+}
+
 pub fn parse_rows(
     headers: &[String],
     rows: &[Vec<String>],
-) -> (Vec<GlucoseRecord>, Vec<DataQualityIssue>) {
+) -> (Vec<GlucoseRecord>, Vec<DataQualityIssue>, Vec<DashboardTableRow>) {
     let mut records = Vec::new();
     let mut issues = Vec::new();
+    let mut table_rows = Vec::new();
     if headers.iter().map(String::as_str).collect::<Vec<_>>() != HEADERS {
         issues.push(issue(
             1,
@@ -39,10 +50,32 @@ pub fn parse_rows(
             IssueCode::HeaderMismatch,
             "Google Sheet 欄位標題不符合規定，請檢查名稱與順序。",
         ));
-        return (records, issues);
+        return (records, issues, table_rows);
     }
     for (index, row) in rows.iter().enumerate() {
         let source_row = index + 2;
+        let raw_date = row.first().map(|s| s.trim()).unwrap_or("");
+        let raw_event = row.get(1).map(|s| s.trim()).unwrap_or("");
+        let raw_glucose = row.get(2).map(|s| s.trim()).unwrap_or("");
+        let remark_1 = row.get(3).cloned().unwrap_or_default();
+        let remark_2 = row.get(4).cloned().unwrap_or_default();
+
+        // 表格顯示列：每一列都產出，有效欄位放顯示值、無效為 None。
+        let parsed_measured_at = parse_date(raw_date);
+        let parsed_event = Event::parse(raw_event);
+        let parsed_glucose = valid_glucose(raw_glucose);
+        table_rows.push(DashboardTableRow {
+            source_row_number: source_row,
+            measured_at: parsed_measured_at.map(|dt| dt.format("%Y/%m/%d %H:%M").to_string()),
+            event: parsed_event.as_ref().map(|e| e.label_zh_tw().to_string()),
+            glucose_mg_dl: parsed_glucose.map(|g| g.to_string()),
+            remark_1: remark_1.clone(),
+            remark_2: remark_2.clone(),
+            parsed_measured_at,
+            parsed_event,
+        });
+
+        // 既有驗證邏輯：缺欄位、日期、事件、血糖依序檢查，有效才進 records。
         if row.len() < 3 || row[..3].iter().any(|value| value.trim().is_empty()) {
             issues.push(issue(
                 source_row,
@@ -70,7 +103,7 @@ pub fn parse_rows(
             ));
             continue;
         };
-        let Ok(glucose) = row[2].trim().parse::<i32>() else {
+        let Some(glucose) = valid_glucose(&row[2]) else {
             issues.push(issue(
                 source_row,
                 IssueSeverity::Error,
@@ -79,28 +112,21 @@ pub fn parse_rows(
             ));
             continue;
         };
-        if !(20..=600).contains(&glucose) {
-            issues.push(issue(
-                source_row,
-                IssueSeverity::Error,
-                IssueCode::InvalidGlucose,
-                "血糖值必須介於 20 至 600 mg/dL，已略過。",
-            ));
-            continue;
-        }
         records.push(GlucoseRecord {
             source_row_number: source_row,
             measured_at,
             event,
             glucose_mg_dl: glucose,
-            remark_1: row.get(3).cloned().unwrap_or_default(),
-            remark_2: row.get(4).cloned().unwrap_or_default(),
+            remark_1,
+            remark_2,
         });
     }
-    (records, issues)
+    (records, issues, table_rows)
 }
 
-pub fn parse_csv(text: &str) -> (Vec<GlucoseRecord>, Vec<DataQualityIssue>) {
+pub fn parse_csv(
+    text: &str,
+) -> (Vec<GlucoseRecord>, Vec<DataQualityIssue>, Vec<DashboardTableRow>) {
     let mut lines = text.lines();
     let headers = lines
         .next()
@@ -134,13 +160,13 @@ mod tests {
             vec!["2026-07-07 12:30".into(), "午餐前".into(), "100".into()],
             vec!["2026/07/07 14:30".into(), "午餐後".into(), "140".into()],
         ];
-        let (records, issues) = parse_rows(&headers(), &rows);
+        let (records, issues, table_rows) = parse_rows(&headers(), &rows);
         assert_eq!(records.len(), 3);
         assert!(issues.is_empty());
-        assert_eq!(
-            records[0].classify(),
-            crate::domain::Classification::InRange
-        );
+        assert_eq!(table_rows.len(), 3);
+        // 表格事件欄為中文
+        assert_eq!(table_rows[0].event.as_deref(), Some("空腹血糖"));
+        assert_eq!(records[0].classify(), crate::domain::Classification::InRange);
         assert_eq!(records[2].classify(), crate::domain::Classification::High);
     }
 
@@ -151,8 +177,16 @@ mod tests {
             vec!["2026/07/07 06:30".into(), "未知".into(), "90".into()],
             vec!["2026/07/07 06:30".into(), "空腹血糖".into(), "90".into()],
         ];
-        let (records, issues) = parse_rows(&headers(), &rows);
+        let (records, issues, table_rows) = parse_rows(&headers(), &rows);
         assert_eq!(records.len(), 1);
         assert_eq!(issues.len(), 2);
+        // 表格仍含全部 3 列
+        assert_eq!(table_rows.len(), 3);
+        // 錯誤列的對應欄位為 None
+        assert!(table_rows[0].measured_at.is_none());
+        assert!(table_rows[1].event.is_none());
+        // 有效列欄位齊全
+        assert!(table_rows[2].measured_at.is_some());
+        assert_eq!(table_rows[2].event.as_deref(), Some("空腹血糖"));
     }
 }

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use super::sheet_parser::parse_csv;
 use crate::{
     config::service::normalize_sheet_reference,
-    domain::{DataQualityIssue, GlucoseRecord},
+    domain::{DashboardTableRow, DataQualityIssue, GlucoseRecord},
     errors::AppError,
 };
 
@@ -30,7 +30,9 @@ pub struct ConnectionReport {
 }
 
 impl SyncService {
-    pub async fn load(&self) -> Result<(Vec<GlucoseRecord>, Vec<DataQualityIssue>), AppError> {
+    pub async fn load(
+        &self,
+    ) -> Result<(Vec<GlucoseRecord>, Vec<DataQualityIssue>, Vec<DashboardTableRow>), AppError> {
         // Google Sheet 為唯一正式資料來源：一旦設定 sheet_id 就一律直讀 Sheet，
         // fixture_path 僅在尚未設定 Sheet 時作為開發/離線回退使用。
         let text = if self.sheet_id.as_ref().map(|id| !id.trim().is_empty()).unwrap_or(false) {
@@ -60,7 +62,7 @@ impl SyncService {
         let sheet_gid = self.sheet_gid.clone().or(parsed_gid);
         let sheet_name = self.sheet_name.clone().unwrap_or_else(|| "Sheet1".into());
         let response = fetch_google_sheet_csv(&sheet_id, sheet_gid.as_deref(), &sheet_name).await?;
-        let (records, issues) = parse_csv(&response.body);
+        let (records, issues, _table_rows) = parse_csv(&response.body);
         let parse_ok = response.status.is_success() && !issues.iter().any(|issue| issue.code == crate::domain::IssueCode::HeaderMismatch);
         Ok(ConnectionReport {
             ok: parse_ok,

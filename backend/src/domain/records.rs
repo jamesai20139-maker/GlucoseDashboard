@@ -3,6 +3,23 @@ use serde::{Deserialize, Serialize};
 
 use super::data_quality::DataQualityIssue;
 
+/// 表格顯示用列：包含 Sheet 每一列（含格式錯誤列）。顯示值為 `Option<String>`，
+/// `None` 表示該欄位格式錯誤（前端顯示 "Type Error"）。`parsed_*` 供後端篩選，
+/// 不序列化送出前端。
+#[derive(Debug, Clone, Serialize)]
+pub struct DashboardTableRow {
+    pub source_row_number: usize,
+    pub measured_at: Option<String>,
+    pub event: Option<String>,
+    pub glucose_mg_dl: Option<String>,
+    pub remark_1: String,
+    pub remark_2: String,
+    #[serde(skip)]
+    pub parsed_measured_at: Option<DateTime<Utc>>,
+    #[serde(skip)]
+    pub parsed_event: Option<Event>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Event {
     Fasting,

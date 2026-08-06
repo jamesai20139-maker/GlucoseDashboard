@@ -24,7 +24,10 @@ pub fn calculate(records: &[GlucoseRecord]) -> AnalysisSummary {
         .iter()
         .filter(|record| record.classify() == Classification::High)
         .count();
-    let pct = |count: usize| count as f64 * 100.0 / records.len() as f64;
+    let pct = |count: usize| {
+        let value = count as f64 * 100.0 / records.len() as f64;
+        (value * 10.0).round() / 10.0
+    };
     // The estimate is intentionally labeled as an estimate; the conversion is kept
     // centralized so a clinically approved formula can be changed in one place.
     let hba1c = (average + 46.7) / 28.7;
@@ -71,6 +74,6 @@ mod tests {
         assert_eq!(summary.minimum_mg_dl, Some(88));
         assert_eq!(summary.maximum_mg_dl, Some(142));
         assert_eq!(summary.low_percent, Some(0.0));
-        assert_eq!(summary.high_percent, Some(66.66666666666667));
+        assert_eq!(summary.high_percent, Some(66.7));
     }
 }

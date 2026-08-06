@@ -168,7 +168,7 @@ export default function App() {
     if (loading || configLoading) return <div className="state-card">正在讀取血糖資料與設定…</div>;
     if (error) return <div className="state-card error-state"><h2>同步失敗</h2><p>{error}</p><button type="button" onClick={() => void reload()}>重新嘗試</button></div>;
     if (!data) return <div className="state-card"><h2>尚未設定資料來源</h2><p>請先填寫左側的 Google Sheet 設定，再按「儲存設定」與「立即更新」。</p></div>;
-    return <><SummaryCards summary={data.summary} /><GlucoseTrendChart records={data.records} /><GlucoseRecordTable records={data.records} search={search} onSearch={setSearch} onExport={() => { window.location.href = exportUrl(period, event || undefined, search || undefined); }} /></>;
+    return <><SummaryCards summary={data.summary} /><GlucoseTrendChart records={data.records} /><GlucoseRecordTable rows={data.table_rows} search={search} onSearch={setSearch} onExport={() => { window.location.href = exportUrl(period, event || undefined, search || undefined); }} /></>;
   }, [configLoading, data, error, event, loading, period, reload, search]);
 
   return <DashboardLayout sidebar={sidebar}>{content}</DashboardLayout>;

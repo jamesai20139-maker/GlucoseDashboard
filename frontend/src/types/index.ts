@@ -4,8 +4,17 @@ export type Classification = 'Low' | 'InRange' | 'High';
 export interface GlucoseRecord {
   source_row_number: number;
   measured_at: string;
-  event: EventName;
+  event: string;
   glucose_mg_dl: number;
+  remark_1: string;
+  remark_2: string;
+}
+
+export interface DashboardTableRow {
+  source_row_number: number;
+  measured_at: string | null;
+  event: string | null;
+  glucose_mg_dl: string | null;
   remark_1: string;
   remark_2: string;
 }
@@ -25,6 +34,7 @@ export interface Summary {
 export interface DashboardResponse {
   summary: Summary;
   records: GlucoseRecord[];
+  table_rows: DashboardTableRow[];
   issues: { message_zh_tw: string; code: string }[];
   status: string;
   last_successful_sync_at: string | null;
