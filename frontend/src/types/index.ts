@@ -35,7 +35,22 @@ export interface ConfigStatus {
   credential_store: string;
   schema_version: number;
   sheet_id: string | null;
+  sheet_gid: string | null;
   sheet_name: string | null;
   fixture_path: string | null;
   last_successful_sync_at: string | null;
+}
+
+export interface ConnectionTestReport {
+  status: string;
+  ok: boolean;
+  sheet_id: string | null;
+  sheet_gid: string | null;
+  sheet_name: string | null;
+  url: string | null;
+  http_status: number | null;
+  record_count: number | null;
+  issue_count: number | null;
+  message: string;
+  detail: string | null;
 }

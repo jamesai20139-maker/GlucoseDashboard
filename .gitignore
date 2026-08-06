@@ -18,3 +18,6 @@ Thumbs.db
 .idea/
 backend/data/
 frontend/.vite/
+
+# 本機設定檔（含使用者 Google Sheet ID，不應入庫）
+.glucose-dashboard.json

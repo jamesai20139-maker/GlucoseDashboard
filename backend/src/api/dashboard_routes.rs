@@ -49,7 +49,7 @@ pub struct DashboardResponse {
     pub last_successful_sync_at: Option<String>,
 }
 
-fn load_records(
+async fn load_records(
     state: &ApiState,
 ) -> Result<
     (
@@ -62,10 +62,11 @@ fn load_records(
     let config = state.config.load();
     let service = SyncService {
         sheet_id: config.sheet_id.clone(),
+        sheet_gid: config.sheet_gid.clone(),
         sheet_name: config.sheet_name.clone(),
         fixture_path: config.fixture_path.map(Into::into),
     };
-    let (records, issues) = service.load()?;
+    let (records, issues) = service.load().await?;
     Ok((records, issues, config.last_successful_sync_at))
 }
 
@@ -74,7 +75,7 @@ pub async fn dashboard(
     Query(query): Query<DashboardQuery>,
 ) -> Result<Json<DashboardResponse>, AppError> {
     let chosen = selection(&query);
-    let (records, issues, last_sync) = load_records(&state)?;
+    let (records, issues, last_sync) = load_records(&state).await?;
     let filtered = selection::filter(&records, &chosen);
     let summary = summary::calculate(&filtered);
     Ok(Json(DashboardResponse {
@@ -92,7 +93,7 @@ pub async fn export_csv(
     Query(query): Query<DashboardQuery>,
 ) -> Result<Response, AppError> {
     let chosen = selection(&query);
-    let (records, _, _) = load_records(&state)?;
+    let (records, _, _) = load_records(&state).await?;
     let records = selection::filter(&records, &chosen);
     let mut csv = String::from("血糖量測日期時間,事件,量測血糖值(mg/dl),備註1,備註2\n");
     for record in records {

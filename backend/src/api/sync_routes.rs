@@ -17,10 +17,11 @@ pub async fn sync(State(state): State<ApiState>) -> Result<Json<SyncResponse>, A
     let config = state.config.load();
     let service = SyncService {
         sheet_id: config.sheet_id.clone(),
+        sheet_gid: config.sheet_gid.clone(),
         sheet_name: config.sheet_name.clone(),
         fixture_path: config.fixture_path.clone().map(Into::into),
     };
-    let (records, issues) = service.load()?;
+    let (records, issues) = service.load().await?;
     let timestamp = Utc::now().to_rfc3339();
     let mut updated = config;
     updated.last_successful_sync_at = Some(timestamp.clone());

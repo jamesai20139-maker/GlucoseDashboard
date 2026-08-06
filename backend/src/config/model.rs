@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub struct LocalConfiguration {
     pub schema_version: u32,
     pub sheet_id: Option<String>,
+    pub sheet_gid: Option<String>,
     pub sheet_name: Option<String>,
     pub fixture_path: Option<String>,
     pub credential_reference: Option<String>,

@@ -3,9 +3,9 @@ import { DashboardLayout } from '../components/layout/DashboardLayout';
 import { GlucoseRecordTable } from '../components/records/GlucoseRecordTable';
 import { SummaryCards } from '../components/summary/SummaryCards';
 import { GlucoseTrendChart } from '../components/trend/GlucoseTrendChart';
-import { configureDashboard, exportUrl, getConfigStatus } from '../services/local_service';
+import { configureDashboard, exportUrl, getConfigStatus, testConnection } from '../services/local_service';
 import { useDashboard } from '../state/dashboard_store';
-import type { ConfigStatus } from '../types';
+import type { ConfigStatus, ConnectionTestReport } from '../types';
 
 const filters = [['', '全部'], ['空腹血糖', '空腹血糖'], ['午餐前', '午餐前'], ['午餐後', '午餐後'], ['晚餐前', '晚餐前'], ['晚餐後', '晚餐後'], ['睡前', '睡前']];
 
@@ -28,6 +28,9 @@ export default function App() {
   const [dirty, setDirty] = useState(false);
   const dirtyRef = useRef(false);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [connectionResult, setConnectionResult] = useState<ConnectionTestReport | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
   const { data, loading, error, reload } = useDashboard(period, event || undefined, search || undefined);
 
   const loadConfig = useCallback(async () => {
@@ -72,6 +75,20 @@ export default function App() {
     }
   }
 
+  async function handleTestConnection() {
+    setTesting(true);
+    setConnectionError(null);
+    try {
+      const result = await testConnection();
+      setConnectionResult(result);
+    } catch (cause) {
+      setConnectionResult(null);
+      setConnectionError(cause instanceof Error ? cause.message : '測試連線失敗');
+    } finally {
+      setTesting(false);
+    }
+  }
+
   const setupSteps = useMemo(() => [
     '在 Google Sheet 右上角複製網址，找到 `/d/` 與 `/edit` 之間的字串，貼到「Sheet ID」。',
     '確認工作表名稱與實際分頁一致；如果只有一張表，可先保留 `Sheet1`。',
@@ -96,19 +113,23 @@ export default function App() {
       </div>
       {configError ? <p className="inline-error">{configError}</p> : null}
       <form className="sheet-form" onSubmit={handleSubmit}>
-        <label>Sheet ID<input value={sheetId} onChange={(event: { target: { value: string } }) => { setSheetId(event.target.value); setDirty(true); dirtyRef.current = true; }} placeholder="1AbC...xYz" required /></label>
+        <label>Google Sheet 網址或 ID<input value={sheetId} onChange={(event: { target: { value: string } }) => { setSheetId(event.target.value); setDirty(true); dirtyRef.current = true; }} placeholder="https://docs.google.com/spreadsheets/d/.../edit" required /></label>
         <label>工作表名稱<input value={sheetName} onChange={(event: { target: { value: string } }) => { setSheetName(event.target.value); setDirty(true); dirtyRef.current = true; }} placeholder="Sheet1" /></label>
         <label>本機 CSV 路徑<input value={fixturePath} onChange={(event: { target: { value: string } }) => { setFixturePath(event.target.value); setDirty(true); dirtyRef.current = true; }} placeholder="backend/tests/fixtures/valid-sheet.csv" /></label>
         <div className="form-actions">
           <button type="submit" disabled={saving || configLoading}>{saving ? '儲存中…' : '儲存設定'}</button>
           <button type="button" onClick={() => { setDirty(false); dirtyRef.current = false; void loadConfig(); }}>重新載入</button>
         </div>
-        <p className="form-hint">Sheet ID 請從 Google Sheet URL 擷取。工作表名稱若未指定，預設為 `Sheet1`。</p>
+        <button className="connection-check" type="button" onClick={() => void handleTestConnection()} disabled={testing || configLoading}>{testing ? '測試中…' : '測試連線'}</button>
+        <p className="form-hint">可直接貼整個 Google Sheet 網址，系統會自動擷取 Sheet ID。工作表名稱若未指定，預設為 `Sheet1`。</p>
       </form>
+      {connectionError ? <div className="connection-result error"><strong>測試失敗</strong><p>{connectionError}</p></div> : null}
+      {connectionResult ? <div className={`connection-result ${connectionResult.ok ? 'ok' : 'error'}`}><strong>{connectionResult.ok ? '測試成功' : '測試失敗'}</strong><p>{connectionResult.message}</p><p>HTTP：{connectionResult.http_status ?? '未知'}　記錄：{connectionResult.record_count ?? '未知'}　問題：{connectionResult.issue_count ?? '未知'}</p><p>Sheet GID：{connectionResult.sheet_gid ?? '未指定'}</p><p>網址：{connectionResult.url ?? '未知'}</p>{connectionResult.detail ? <p className="connection-detail">{connectionResult.detail}</p> : null}</div> : null}
       <div className="config-meta">
         <p><span>Sheet ID</span><strong>{config?.sheet_id || '尚未設定'}</strong></p>
+        <p><span>Sheet GID</span><strong>{config?.sheet_gid || '未指定'}</strong></p>
         <p><span>工作表</span><strong>{config?.sheet_name || 'Sheet1'}</strong></p>
-        <p><span>來源</span><strong>{config?.fixture_path || '未指定本機 CSV'}</strong></p>
+        <p><span>來源</span><strong>{config?.fixture_path || 'Google Sheet 直讀'}</strong></p>
         <p><span>最後同步</span><strong>{config?.last_successful_sync_at ? config.last_successful_sync_at.slice(0, 16).replace('T', ' ') : '尚未同步'}</strong></p>
       </div>
     </section>

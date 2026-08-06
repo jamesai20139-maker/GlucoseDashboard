@@ -1,4 +1,4 @@
-import type { ConfigStatus, DashboardResponse } from '../types';
+import type { ConfigStatus, ConnectionTestReport, DashboardResponse } from '../types';
 
 export interface ConfigurePayload {
   sheet_id: string;
@@ -23,6 +23,22 @@ export async function configureDashboard(payload: ConfigurePayload): Promise<Con
     throw new Error(message || '儲存 Google Sheet 設定失敗');
   }
   return getConfigStatus();
+}
+
+export async function testConnection(): Promise<ConnectionTestReport> {
+  const response = await fetch('/api/config/test-connection');
+  if (!response.ok) {
+    const bodyText = await response.clone().text();
+    let message = bodyText || `測試連線失敗 (${response.status})`;
+    try {
+      const parsed = JSON.parse(bodyText) as { message?: string };
+      message = parsed.message || message;
+    } catch {
+      // Keep the raw body text when the response is not JSON.
+    }
+    throw new Error(message);
+  }
+  return response.json() as Promise<ConnectionTestReport>;
 }
 
 export async function getDashboard(period = 'all', event?: string, search?: string): Promise<DashboardResponse> {

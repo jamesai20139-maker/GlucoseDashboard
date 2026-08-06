@@ -1,3 +1,3 @@
 pub fn usage() -> &'static str {
-    "glucose-dashboard config <sheet-id> [fixture-path]"
+    "glucose-dashboard config <sheet-url-or-id> [fixture-path]"
 }
