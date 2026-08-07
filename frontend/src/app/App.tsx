@@ -5,6 +5,7 @@ import { SummaryCards } from '../components/summary/SummaryCards';
 import { GlucoseTrendChart } from '../components/trend/GlucoseTrendChart';
 import { configureDashboard, exportUrl, getConfigStatus, syncDashboard, testConnection, type PeriodSelection } from '../services/local_service';
 import { useDashboard } from '../state/dashboard_store';
+import { useTheme } from '../state/use_theme';
 import type { ConfigStatus, ConnectionTestReport } from '../types';
 
 const filters = [['', '全部'], ['空腹血糖', '空腹血糖'], ['午餐前', '午餐前'], ['午餐後', '午餐後'], ['晚餐前', '晚餐前'], ['晚餐後', '晚餐後'], ['睡前', '睡前']];
@@ -137,6 +138,7 @@ export default function App() {
   ], []);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [theme, toggleTheme] = useTheme();
 
   const settingsPanel = <>
     <section className="side-section setup-card">
@@ -225,5 +227,5 @@ export default function App() {
     return <><SummaryCards summary={data.summary} /><GlucoseTrendChart records={data.records} /><GlucoseRecordTable rows={data.table_rows} search={search} onSearch={setSearch} onExport={() => { window.location.href = exportUrl(selection, event || undefined, search || undefined); }} /></>;
   }, [configLoading, data, error, event, loading, selection, reload, search]);
 
-  return <DashboardLayout sidebar={sidebar} onOpenSettings={() => setSettingsOpen(true)}>{content}{settingsOpen ? <div className="settings-overlay" role="dialog" aria-modal="true" aria-label="設定"><div className="settings-modal"><div className="settings-modal-header"><h2>⚙　設定</h2><button className="settings-close" type="button" aria-label="關閉" onClick={() => setSettingsOpen(false)}>✕</button></div><div className="settings-modal-body">{settingsPanel}</div></div></div> : null}</DashboardLayout>;
+  return <DashboardLayout sidebar={sidebar} onOpenSettings={() => setSettingsOpen(true)} theme={theme} onToggleTheme={toggleTheme}>{content}{settingsOpen ? <div className="settings-overlay" role="dialog" aria-modal="true" aria-label="設定"><div className="settings-modal"><div className="settings-modal-header"><h2>⚙　設定</h2><button className="settings-close" type="button" aria-label="關閉" onClick={() => setSettingsOpen(false)}>✕</button></div><div className="settings-modal-body">{settingsPanel}</div></div></div> : null}</DashboardLayout>;
 }
