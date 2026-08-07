@@ -28,7 +28,7 @@ async fn main() {
             return;
         }
         Some("doctor") => {
-            for check in diagnostics::checks::run(&config) {
+            for check in diagnostics::checks::run(&config, None) {
                 println!("{} {}", if check.ok { "✓" } else { "✗" }, check.name);
             }
             return;

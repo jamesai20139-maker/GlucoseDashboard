@@ -15,13 +15,22 @@ pub struct SyncResponse {
 
 pub async fn sync(State(state): State<ApiState>) -> Result<Json<SyncResponse>, AppError> {
     let config = state.config.load();
+    let signature = super::router::source_signature(&config);
     let service = SyncService {
         sheet_id: config.sheet_id.clone(),
         sheet_gid: config.sheet_gid.clone(),
         sheet_name: config.sheet_name.clone(),
         fixture_path: config.fixture_path.clone().map(Into::into),
     };
-    let (records, issues, _table_rows) = service.load().await?;
+    let (records, issues, table_rows) = service.load().await?;
+    // 強制重抓後寫入快取，讓後續切換區間不再重抓 Sheet。
+    *state.records_cache.write().await = Some(super::router::RecordsCache {
+        records: records.clone(),
+        table_rows,
+        issues: issues.clone(),
+        fetched_at: Utc::now(),
+        source_signature: signature,
+    });
     let timestamp = Utc::now().to_rfc3339();
     let mut updated = config;
     updated.last_successful_sync_at = Some(timestamp.clone());

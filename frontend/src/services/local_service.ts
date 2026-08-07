@@ -41,8 +41,39 @@ export async function testConnection(): Promise<ConnectionTestReport> {
   return response.json() as Promise<ConnectionTestReport>;
 }
 
-export async function getDashboard(period = 'all', event?: string, search?: string): Promise<DashboardResponse> {
-  const params = new URLSearchParams({ period });
+/// 時間區間細粒參數。依 `period` 帶對應欄位：
+/// `all`（無參數）、`day`（start/end）、`week`（year/week）、
+/// `month`（year/month）、`quarter`（year/quarter）。
+export interface PeriodSelection {
+  period: 'all' | 'day' | 'week' | 'month' | 'quarter';
+  start?: string;   // YYYY-MM-DD（day 用）
+  end?: string;     // YYYY-MM-DD（day 用）
+  year?: number;    // week/month/quarter 用
+  week?: number;    // week 用
+  month?: number;   // month 用
+  quarter?: number; // quarter 用
+}
+
+function appendPeriodParams(params: URLSearchParams, sel: PeriodSelection) {
+  params.set('period', sel.period);
+  if (sel.period === 'day') {
+    if (sel.start) params.set('start', sel.start);
+    if (sel.end) params.set('end', sel.end);
+  } else if (sel.period === 'week') {
+    if (sel.year) params.set('year', String(sel.year));
+    if (sel.week) params.set('week', String(sel.week));
+  } else if (sel.period === 'month') {
+    if (sel.year) params.set('year', String(sel.year));
+    if (sel.month) params.set('month', String(sel.month));
+  } else if (sel.period === 'quarter') {
+    if (sel.year) params.set('year', String(sel.year));
+    if (sel.quarter) params.set('quarter', String(sel.quarter));
+  }
+}
+
+export async function getDashboard(selection: PeriodSelection, event?: string, search?: string): Promise<DashboardResponse> {
+  const params = new URLSearchParams();
+  appendPeriodParams(params, selection);
   if (event) params.set('event', event);
   if (search) params.set('search', search);
   const response = await fetch(`/api/dashboard?${params}`);
@@ -56,8 +87,9 @@ export async function syncDashboard(): Promise<DashboardResponse> {
   return response.json() as Promise<DashboardResponse>;
 }
 
-export function exportUrl(period = 'all', event?: string, search?: string): string {
-  const params = new URLSearchParams({ period });
+export function exportUrl(selection: PeriodSelection, event?: string, search?: string): string {
+  const params = new URLSearchParams();
+  appendPeriodParams(params, selection);
   if (event) params.set('event', event);
   if (search) params.set('search', search);
   return `/api/records/export.csv?${params}`;

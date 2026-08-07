@@ -1,5 +1,7 @@
-use crate::{auth::credential_store::CredentialStore, config::store::ConfigStore};
+use chrono::{DateTime, Utc};
 use serde::Serialize;
+
+use crate::{auth::credential_store::CredentialStore, config::store::ConfigStore};
 
 #[derive(Debug, Serialize)]
 pub struct CheckResult {
@@ -8,7 +10,10 @@ pub struct CheckResult {
     pub message: String,
 }
 
-pub fn run(store: &ConfigStore) -> Vec<CheckResult> {
+/// 暫存層狀態：`(抓取時間, 紀錄筆數)`，無快取時為 None。
+pub type CacheInfo = Option<(DateTime<Utc>, usize)>;
+
+pub fn run(store: &ConfigStore, cache: CacheInfo) -> Vec<CheckResult> {
     let config = store.load();
     let credential_store = CredentialStore;
     vec![
@@ -40,7 +45,14 @@ pub fn run(store: &ConfigStore) -> Vec<CheckResult> {
         CheckResult {
             name: "Cache".into(),
             ok: true,
-            message: "暫存層可用".into(),
+            message: match cache {
+                Some((fetched_at, count)) => format!(
+                    "進程記憶體暫存：{} 筆（{} 抓取，重啟清空）",
+                    count,
+                    fetched_at.format("%Y/%m/%d %H:%M")
+                ),
+                None => "進程記憶體暫存：未命中（重啟清空）".into(),
+            },
         },
         CheckResult {
             name: "Dashboard".into(),

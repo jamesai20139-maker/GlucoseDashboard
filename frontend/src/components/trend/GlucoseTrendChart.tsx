@@ -12,7 +12,7 @@ export function GlucoseTrendChart({ records }: { records: GlucoseRecord[] }) {
   const points = records.slice().sort((a, b) => a.measured_at.localeCompare(b.measured_at));
   const max = Math.max(200, ...points.map((record) => record.glucose_mg_dl));
   return <section className="panel chart-panel" aria-label="血糖趨勢圖">
-    <header className="panel-title"><h2>♧ 血糖趨勢圖</h2><div className="chart-period"><button className="active">日</button><button>週</button><button>月</button><button>季</button></div></header>
+    <header className="panel-title"><h2>♧ 血糖趨勢圖</h2></header>
     {points.length === 0 ? <div className="empty">此區間沒有有效血糖紀錄</div> : <div className="chart-wrap">
       <div className="chart-zones"><span className="high-zone" /><span className="normal-zone" /><span className="low-zone" /></div>
       <svg viewBox="0 0 900 300" role="img" aria-label="血糖趨勢">

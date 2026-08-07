@@ -48,17 +48,21 @@ pub async fn configure(
     Json(request): Json<ConfigureRequest>,
 ) -> Result<Json<crate::config::model::LocalConfiguration>, AppError> {
     let sheet_name = request.sheet_name.unwrap_or_else(|| "Sheet1".into());
-    service::configure(
+    let saved = service::configure(
         &state.config,
         request.sheet_id,
         sheet_name,
         request.fixture_path,
-    )
-    .map(Json)
+    )?;
+    // 設定變更後舊快取簽章不再相符，主動清空避免殘留。
+    *state.records_cache.write().await = None;
+    Ok(Json(saved))
 }
 
 pub async fn diagnostics(State(state): State<ApiState>) -> Json<Vec<checks::CheckResult>> {
-    Json(checks::run(&state.config))
+    let cache = state.records_cache.read().await;
+    let cache_info = cache.as_ref().map(|c| (c.fetched_at, c.records.len()));
+    Json(checks::run(&state.config, cache_info))
 }
 
 #[derive(Serialize)]

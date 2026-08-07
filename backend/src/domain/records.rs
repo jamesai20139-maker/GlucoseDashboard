@@ -1,4 +1,4 @@
-use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::data_quality::DataQualityIssue;
@@ -105,17 +105,43 @@ impl GlucoseRecord {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// 時間區間。變體皆為「明確區間」（非相對今天），讓使用者可指定任意
+/// 年/週/月/季/日起訖，由前端傳入細粒 query 參數組裝。
+///
+/// 週採「台灣常用」定義：以該年 1/1 為第 1 週第 1 天，第 N 週 =
+/// 1/1 + (N-1)*7 天起的連續 7 天（可能跨年，含示）。季採 Q1=1-3 月、
+/// Q2=4-6 月、Q3=7-9 月、Q4=10-12 月。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Period {
-    #[default]
-    Day,
-    Week,
-    Month,
-    Quarter,
-    Custom {
+    /// 全部資料，`contains()` 恆真。
+    All,
+    /// 自訂起訖日期區間（含兩端）。
+    Day {
         start: NaiveDate,
         end: NaiveDate,
     },
+    /// 某年第 N 週（1/1 起算）。
+    Week {
+        year: i32,
+        week: u32,
+    },
+    /// 某年某月。
+    Month {
+        year: i32,
+        month: u32,
+    },
+    /// 某年某季（1..=4）。
+    Quarter {
+        year: i32,
+        quarter: u32,
+    },
+}
+
+impl Default for Period {
+    /// 預設顯示全部資料。
+    fn default() -> Self {
+        Self::All
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -126,24 +152,64 @@ pub struct AnalysisSelection {
 }
 
 impl Period {
+    /// 將此區間對應的 `[start, end]`（含兩端）`NaiveDate` 算出。
+    /// `All` 回傳 `None`（`contains()` 對所有日期恆真，不需邊界）。
+    pub fn date_range(&self) -> Option<(NaiveDate, NaiveDate)> {
+        match self {
+            Self::All => None,
+            Self::Day { start, end } => Some((*start, *end)),
+            Self::Week { year, week } => {
+                let year_start = NaiveDate::from_ymd_opt(*year, 1, 1)?;
+                // 第 1 週從 1/1 開始；第 N 週從 1/1 + (N-1)*7 天開始。
+                let start = year_start + Duration::days(((*week as i64) - 1) * 7);
+                let end = start + Duration::days(6);
+                Some((start, end))
+            }
+            Self::Month { year, month } => {
+                let start = NaiveDate::from_ymd_opt(*year, *month, 1)?;
+                // 月底：下月 1 號減 1 天（12 月跨年時取次年 1/1 減 1）。
+                let next_month = if *month == 12 {
+                    NaiveDate::from_ymd_opt(*year + 1, 1, 1)?
+                } else {
+                    NaiveDate::from_ymd_opt(*year, *month + 1, 1)?
+                };
+                let end = next_month - Duration::days(1);
+                Some((start, end))
+            }
+            Self::Quarter { year, quarter } => {
+                // Q1=1-3 月、Q2=4-6 月、Q3=7-9 月、Q4=10-12 月。
+                let start_month = ((*quarter - 1) * 3) + 1;
+                let end_month = start_month + 2;
+                let start = NaiveDate::from_ymd_opt(*year, start_month, 1)?;
+                let next_after_end = if end_month == 12 {
+                    NaiveDate::from_ymd_opt(*year + 1, 1, 1)?
+                } else {
+                    NaiveDate::from_ymd_opt(*year, end_month + 1, 1)?
+                };
+                let end = next_after_end - Duration::days(1);
+                Some((start, end))
+            }
+        }
+    }
+
+    /// 此 `DateTime` 的日期是否落在區間內。`All` 恆真。
     pub fn contains(&self, value: DateTime<Utc>) -> bool {
         let date = value.date_naive();
-        let today = Utc::now().date_naive();
-        let start = match self {
-            Self::Day => today,
-            Self::Week => today - Duration::days(6),
-            Self::Month => NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap_or(today),
-            Self::Quarter => {
-                let month = ((today.month0() / 3) * 3) + 1;
-                NaiveDate::from_ymd_opt(today.year(), month, 1).unwrap_or(today)
-            }
-            Self::Custom { start, .. } => *start,
-        };
-        let end = match self {
-            Self::Custom { end, .. } => *end,
-            _ => today,
-        };
-        date >= start && date <= end
+        match self.date_range() {
+            None => true,
+            Some((start, end)) => date >= start && date <= end,
+        }
+    }
+
+    /// 繁體中文顯示標籤，供前端顯示當前區間。
+    pub fn label_zh_tw(&self) -> String {
+        match self {
+            Self::All => "全部".to_string(),
+            Self::Day { start, end } => format!("{}～{}", start, end),
+            Self::Week { year, week } => format!("{} 年第 {} 週", year, week),
+            Self::Month { year, month } => format!("{} 年 {} 月", year, month),
+            Self::Quarter { year, quarter } => format!("{} 年第 {} 季", year, quarter),
+        }
     }
 }
 
@@ -162,3 +228,106 @@ pub struct AnalysisSummary {
 
 #[allow(dead_code)]
 pub type ParseResult = (Vec<GlucoseRecord>, Vec<DataQualityIssue>);
+
+#[cfg(test)]
+mod tests {
+    use super::Period;
+    use chrono::{DateTime, NaiveDate, Utc};
+
+    fn dt(date: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(&format!("{}T00:00:00Z", date))
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    fn day(start: &str, end: &str) -> Period {
+        Period::Day {
+            start: NaiveDate::parse_from_str(start, "%Y-%m-%d").unwrap(),
+            end: NaiveDate::parse_from_str(end, "%Y-%m-%d").unwrap(),
+        }
+    }
+
+    #[test]
+    fn all_contains_every_date() {
+        let period = Period::All;
+        assert!(period.contains(dt("2000-01-01")));
+        assert!(period.contains(dt("2099-12-31")));
+        assert_eq!(period.label_zh_tw(), "全部");
+    }
+
+    #[test]
+    fn day_range_is_inclusive() {
+        let period = day("2026-03-01", "2026-03-31");
+        assert!(period.contains(dt("2026-03-01")));
+        assert!(period.contains(dt("2026-03-31")));
+        assert!(!period.contains(dt("2026-02-28")));
+        assert!(!period.contains(dt("2026-04-01")));
+    }
+
+    #[test]
+    fn week_starts_on_jan_1() {
+        // 2026/1/1 為第 1 週第 1 天 → 1/1..1/7。
+        let period = Period::Week { year: 2026, week: 1 };
+        assert!(period.contains(dt("2026-01-01")));
+        assert!(period.contains(dt("2026-01-07")));
+        assert!(!period.contains(dt("2025-12-31")));
+        assert!(!period.contains(dt("2026-01-08")));
+        // 第 2 週 = 1/8..1/14。
+        let period2 = Period::Week { year: 2026, week: 2 };
+        assert!(period2.contains(dt("2026-01-08")));
+        assert!(period2.contains(dt("2026-01-14")));
+        assert!(period2.date_range() == Some((
+            NaiveDate::from_ymd_opt(2026, 1, 8).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 1, 14).unwrap()
+        )));
+    }
+
+    #[test]
+    fn month_range_covers_full_month() {
+        let period = Period::Month { year: 2026, month: 2 };
+        assert!(period.contains(dt("2026-02-01")));
+        assert!(period.contains(dt("2026-02-28")));
+        assert!(!period.contains(dt("2026-01-31")));
+        assert!(!period.contains(dt("2026-03-01")));
+        // 閏年二月有 29 天。
+        let leap = Period::Month { year: 2024, month: 2 };
+        assert!(leap.contains(dt("2024-02-29")));
+    }
+
+    #[test]
+    fn december_month_range_does_not_overflow() {
+        let period = Period::Month { year: 2026, month: 12 };
+        assert!(period.contains(dt("2026-12-01")));
+        assert!(period.contains(dt("2026-12-31")));
+        assert!(!period.contains(dt("2027-01-01")));
+    }
+
+    #[test]
+    fn quarter_ranges() {
+        // Q1 = 1-3 月。
+        let q1 = Period::Quarter { year: 2026, quarter: 1 };
+        assert!(q1.contains(dt("2026-01-01")));
+        assert!(q1.contains(dt("2026-03-31")));
+        assert!(!q1.contains(dt("2025-12-31")));
+        assert!(!q1.contains(dt("2026-04-01")));
+        // Q4 = 10-12 月，跨年邊界。
+        let q4 = Period::Quarter { year: 2026, quarter: 4 };
+        assert!(q4.contains(dt("2026-10-01")));
+        assert!(q4.contains(dt("2026-12-31")));
+        assert!(!q4.contains(dt("2027-01-01")));
+        assert!(!q4.contains(dt("2026-09-30")));
+    }
+
+    #[test]
+    fn labels_are_traditional_chinese() {
+        assert_eq!(Period::Week { year: 2026, week: 5 }.label_zh_tw(), "2026 年第 5 週");
+        assert_eq!(Period::Month { year: 2026, month: 7 }.label_zh_tw(), "2026 年 7 月");
+        assert_eq!(Period::Quarter { year: 2026, quarter: 2 }.label_zh_tw(), "2026 年第 2 季");
+        assert_eq!(day("2026-03-01", "2026-03-31").label_zh_tw(), "2026-03-01～2026-03-31");
+    }
+
+    #[test]
+    fn default_is_all() {
+        assert_eq!(Period::default(), Period::All);
+    }
+}

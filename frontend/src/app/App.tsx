@@ -3,7 +3,7 @@ import { DashboardLayout } from '../components/layout/DashboardLayout';
 import { GlucoseRecordTable } from '../components/records/GlucoseRecordTable';
 import { SummaryCards } from '../components/summary/SummaryCards';
 import { GlucoseTrendChart } from '../components/trend/GlucoseTrendChart';
-import { configureDashboard, exportUrl, getConfigStatus, testConnection } from '../services/local_service';
+import { configureDashboard, exportUrl, getConfigStatus, syncDashboard, testConnection, type PeriodSelection } from '../services/local_service';
 import { useDashboard } from '../state/dashboard_store';
 import type { ConfigStatus, ConnectionTestReport } from '../types';
 
@@ -15,8 +15,18 @@ function configLabel(config: ConfigStatus | null): string {
   return `已設定 ${config.sheet_name || 'Sheet1'}`;
 }
 
+const THIS_YEAR = new Date().getFullYear();
+const THIS_MONTH = new Date().getMonth() + 1;
+const THIS_QUARTER = Math.ceil(THIS_MONTH / 3);
+
 export default function App() {
-  const [period, setPeriod] = useState('all');
+  const [period, setPeriod] = useState<'all' | 'day' | 'week' | 'month' | 'quarter'>('all');
+  const [dayStart, setDayStart] = useState('');
+  const [dayEnd, setDayEnd] = useState('');
+  const [selYear, setSelYear] = useState(THIS_YEAR);
+  const [selWeek, setSelWeek] = useState(1);
+  const [selMonth, setSelMonth] = useState(THIS_MONTH);
+  const [selQuarter, setSelQuarter] = useState(THIS_QUARTER);
   const [event, setEvent] = useState('');
   const [search, setSearch] = useState('');
   const [config, setConfig] = useState<ConfigStatus | null>(null);
@@ -31,7 +41,29 @@ export default function App() {
   const [testing, setTesting] = useState(false);
   const [connectionResult, setConnectionResult] = useState<ConnectionTestReport | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
-  const { data, loading, error, reload } = useDashboard(period, event || undefined, search || undefined);
+
+  // 由目前時間區間選擇組裝 PeriodSelection，供 useDashboard 與匯出使用。
+  const selection: PeriodSelection = useMemo(() => {
+    if (period === 'day') return { period, start: dayStart, end: dayEnd };
+    if (period === 'week') return { period, year: selYear, week: selWeek };
+    if (period === 'month') return { period, year: selYear, month: selMonth };
+    if (period === 'quarter') return { period, year: selYear, quarter: selQuarter };
+    return { period: 'all' };
+  }, [period, dayStart, dayEnd, selYear, selWeek, selMonth, selQuarter]);
+
+  const { data, loading, error, reload } = useDashboard(selection, event || undefined, search || undefined);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // 「立即更新」：強制重新抓取 Sheet（POST /api/sync），更新同步時間後再重載儀表板。
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await syncDashboard();
+      await reload();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [reload]);
 
   const loadConfig = useCallback(async () => {
     setConfigLoading(true);
@@ -152,9 +184,26 @@ export default function App() {
   const sidebar = <>
     <section className="side-section">
       <h3>▣　時間區間</h3>
-      <div className="periods">{[['all', '日'], ['week', '週'], ['month', '月'], ['quarter', '季']].map(([key, label]) => <button key={key} className={period === key ? 'active' : ''} type="button" onClick={() => setPeriod(key)}>{label}</button>)}</div>
-      <label className="date-label">▣　自訂日期<input type="text" placeholder="2026/07/07 ～ 2026/07/07" /></label>
-      <button className="refresh" type="button" onClick={() => void reload()}>⟳　立即更新</button>
+      <div className="periods">{[['all', '全部'], ['day', '日'], ['week', '週'], ['month', '月'], ['quarter', '季']].map(([key, label]) => <button key={key} className={period === key ? 'active' : ''} type="button" onClick={() => setPeriod(key as typeof period)}>{label}</button>)}</div>
+      {period === 'day' ? <div className="period-config">
+        <label>起<input type="date" value={dayStart} onChange={(e: { target: { value: string } }) => setDayStart(e.target.value)} placeholder="2026/07/07" /></label>
+        <span className="range-sep">～</span>
+        <label>訖<input type="date" value={dayEnd} onChange={(e: { target: { value: string } }) => setDayEnd(e.target.value)} placeholder="2026/07/07" /></label>
+      </div> : null}
+      {period === 'week' ? <div className="period-config">
+        <label>年<input type="number" min="2000" max="2100" value={selYear} onChange={(e: { target: { value: string } }) => setSelYear(Number(e.target.value))} /></label>
+        <label>週<input type="number" min="1" max="53" value={selWeek} onChange={(e: { target: { value: string } }) => setSelWeek(Number(e.target.value))} /></label>
+        <p className="config-hint">第 N 週以 1/1 起算，每 7 天為一週。</p>
+      </div> : null}
+      {period === 'month' ? <div className="period-config">
+        <label>年<input type="number" min="2000" max="2100" value={selYear} onChange={(e: { target: { value: string } }) => setSelYear(Number(e.target.value))} /></label>
+        <label>月<select value={selMonth} onChange={(e: { target: { value: string } }) => setSelMonth(Number(e.target.value))}>{Array.from({ length: 12 }, (_, i) => i + 1).map((m) => <option key={m} value={m}>{m} 月</option>)}</select></label>
+      </div> : null}
+      {period === 'quarter' ? <div className="period-config">
+        <label>年<input type="number" min="2000" max="2100" value={selYear} onChange={(e: { target: { value: string } }) => setSelYear(Number(e.target.value))} /></label>
+        <label>季<select value={selQuarter} onChange={(e: { target: { value: string } }) => setSelQuarter(Number(e.target.value))}>{[1, 2, 3, 4].map((q) => <option key={q} value={q}>第 {q} 季（{q === 1 ? '1-3' : q === 2 ? '4-6' : q === 3 ? '7-9' : '10-12'} 月）</option>)}</select></label>
+      </div> : null}
+      <button className="refresh" type="button" disabled={refreshing} onClick={() => void handleRefresh()}>{refreshing ? '⟳　更新中…' : '⟳　立即更新'}</button>
       <p className="sync-status"><i /> {data?.last_successful_sync_at ? `資料已更新：${data.last_successful_sync_at.slice(0, 16).replace('T', ' ')}` : '等待資料同步'}</p>
     </section>
     <section className="side-section">
@@ -173,8 +222,8 @@ export default function App() {
     if (loading || configLoading) return <div className="state-card">正在讀取血糖資料與設定…</div>;
     if (error) return <div className="state-card error-state"><h2>同步失敗</h2><p>{error}</p><button type="button" onClick={() => void reload()}>重新嘗試</button></div>;
     if (!data) return <div className="state-card"><h2>尚未設定資料來源</h2><p>請先按右上角「設定」按鈕填寫 Google Sheet 設定，再按「儲存設定」與「立即更新」。</p></div>;
-    return <><SummaryCards summary={data.summary} /><GlucoseTrendChart records={data.records} /><GlucoseRecordTable rows={data.table_rows} search={search} onSearch={setSearch} onExport={() => { window.location.href = exportUrl(period, event || undefined, search || undefined); }} /></>;
-  }, [configLoading, data, error, event, loading, period, reload, search]);
+    return <><SummaryCards summary={data.summary} /><GlucoseTrendChart records={data.records} /><GlucoseRecordTable rows={data.table_rows} search={search} onSearch={setSearch} onExport={() => { window.location.href = exportUrl(selection, event || undefined, search || undefined); }} /></>;
+  }, [configLoading, data, error, event, loading, selection, reload, search]);
 
   return <DashboardLayout sidebar={sidebar} onOpenSettings={() => setSettingsOpen(true)}>{content}{settingsOpen ? <div className="settings-overlay" role="dialog" aria-modal="true" aria-label="設定"><div className="settings-modal"><div className="settings-modal-header"><h2>⚙　設定</h2><button className="settings-close" type="button" aria-label="關閉" onClick={() => setSettingsOpen(false)}>✕</button></div><div className="settings-modal-body">{settingsPanel}</div></div></div> : null}</DashboardLayout>;
 }
