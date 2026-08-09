@@ -189,9 +189,10 @@ export default function App() {
   ], []);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'sheet' | 'events'>('sheet');
   const [theme, toggleTheme] = useTheme();
 
-  const settingsPanel = <>
+  const sheetPanel = <>
     <section className="side-section setup-card">
       <h3>⚙　Google Sheet 設定</h3>
       <div className="status-banner">
@@ -220,6 +221,21 @@ export default function App() {
         <p><span>最後同步</span><strong>{config?.last_successful_sync_at ? config.last_successful_sync_at.slice(0, 16).replace('T', ' ') : '尚未同步'}</strong></p>
       </div>
     </section>
+    <section className="side-section guidance-card">
+      <h3>📘　設定步驟</h3>
+      <ol className="step-list">
+        {setupSteps.map((step) => <li key={step}>{step}</li>)}
+      </ol>
+    </section>
+    <section className="side-section guidance-card">
+      <h3>⚠　注意事項</h3>
+      <ul className="note-list">
+        {notes.map((note) => <li key={note}>{note}</li>)}
+      </ul>
+    </section>
+  </>;
+
+  const eventsPanel = <>
     <section className="side-section custom-events-card">
       <h3>🏷　事件關鍵字設定</h3>
       <p className="form-hint">新增自訂事件關鍵字後，事件欄填入相同字串的列會以您指定的閾值判定高低，並出現在側邊「篩選項目」。</p>
@@ -241,18 +257,15 @@ export default function App() {
         <p className="form-hint">閾值須介於 20–600，且下限須小於上限。同名關鍵字會覆蓋舊閾值。</p>
       </form>
     </section>
-    <section className="side-section guidance-card">
-      <h3>📘　設定步驟</h3>
-      <ol className="step-list">
-        {setupSteps.map((step) => <li key={step}>{step}</li>)}
-      </ol>
-    </section>
-    <section className="side-section guidance-card">
-      <h3>⚠　注意事項</h3>
-      <ul className="note-list">
-        {notes.map((note) => <li key={note}>{note}</li>)}
-      </ul>
-    </section>
+  </>;
+
+  const settingsTabs: [typeof settingsTab, string, string][] = [['sheet', 'sheet', 'Google Sheet 設定'], ['events', 'events', '事件關鍵字設定']];
+
+  const settingsPanel = <>
+    <nav className="settings-tabs" aria-label="設定分頁">
+      {settingsTabs.map(([key, id, label]) => <button key={key} type="button" className={`settings-tab ${settingsTab === key ? 'active' : ''}`} aria-selected={settingsTab === key} onClick={() => setSettingsTab(key)}>{label}</button>)}
+    </nav>
+    <div className="settings-tab-content">{settingsTab === 'sheet' ? sheetPanel : eventsPanel}</div>
   </>;
 
   const sidebar = <>
