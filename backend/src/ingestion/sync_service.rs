@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use super::sheet_parser::parse_csv;
 use crate::{
     config::service::normalize_sheet_reference,
-    domain::{DashboardTableRow, DataQualityIssue, GlucoseRecord},
+    domain::{CustomEvent, DashboardTableRow, DataQualityIssue, GlucoseRecord},
     errors::AppError,
 };
 
@@ -13,6 +13,7 @@ pub struct SyncService {
     pub sheet_gid: Option<String>,
     pub sheet_name: Option<String>,
     pub fixture_path: Option<PathBuf>,
+    pub custom_events: Vec<CustomEvent>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -32,24 +33,38 @@ pub struct ConnectionReport {
 impl SyncService {
     pub async fn load(
         &self,
-    ) -> Result<(Vec<GlucoseRecord>, Vec<DataQualityIssue>, Vec<DashboardTableRow>), AppError> {
+    ) -> Result<
+        (
+            Vec<GlucoseRecord>,
+            Vec<DataQualityIssue>,
+            Vec<DashboardTableRow>,
+        ),
+        AppError,
+    > {
         // Google Sheet 為唯一正式資料來源：一旦設定 sheet_id 就一律直讀 Sheet，
         // fixture_path 僅在尚未設定 Sheet 時作為開發/離線回退使用。
-        let text = if self.sheet_id.as_ref().map(|id| !id.trim().is_empty()).unwrap_or(false) {
+        let text = if self
+            .sheet_id
+            .as_ref()
+            .map(|id| !id.trim().is_empty())
+            .unwrap_or(false)
+        {
             let sheet_id = self.sheet_id.clone().unwrap();
             let sheet_gid = self.sheet_gid.clone();
             let sheet_name = self.sheet_name.clone().unwrap_or_else(|| "Sheet1".into());
-            let response = fetch_google_sheet_csv(&sheet_id, sheet_gid.as_deref(), &sheet_name).await?;
+            let response =
+                fetch_google_sheet_csv(&sheet_id, sheet_gid.as_deref(), &sheet_name).await?;
             if !response.status.is_success() {
                 return Err(AppError::Sync(response.message));
             }
             response.body
         } else if let Some(path) = self.fixture_path.clone() {
-            std::fs::read_to_string(path).map_err(|_| AppError::Sync("無法讀取資料來源。".into()))?
+            std::fs::read_to_string(path)
+                .map_err(|_| AppError::Sync("無法讀取資料來源。".into()))?
         } else {
             return Err(AppError::NotConfigured("尚未設定 Google Sheet。".into()));
         };
-        Ok(parse_csv(&text))
+        Ok(parse_csv(&text, &self.custom_events))
     }
 
     pub async fn test_google_sheet_connection(&self) -> Result<ConnectionReport, AppError> {
@@ -62,8 +77,11 @@ impl SyncService {
         let sheet_gid = self.sheet_gid.clone().or(parsed_gid);
         let sheet_name = self.sheet_name.clone().unwrap_or_else(|| "Sheet1".into());
         let response = fetch_google_sheet_csv(&sheet_id, sheet_gid.as_deref(), &sheet_name).await?;
-        let (records, issues, _table_rows) = parse_csv(&response.body);
-        let parse_ok = response.status.is_success() && !issues.iter().any(|issue| issue.code == crate::domain::IssueCode::HeaderMismatch);
+        let (records, issues, _table_rows) = parse_csv(&response.body, &self.custom_events);
+        let parse_ok = response.status.is_success()
+            && !issues
+                .iter()
+                .any(|issue| issue.code == crate::domain::IssueCode::HeaderMismatch);
         Ok(ConnectionReport {
             ok: parse_ok,
             sheet_id: Some(sheet_id),
@@ -87,7 +105,12 @@ impl SyncService {
                     Some(
                         issues
                             .into_iter()
-                            .map(|issue| format!("第 {} 列：{}", issue.source_row_number, issue.message_zh_tw))
+                            .map(|issue| {
+                                format!(
+                                    "第 {} 列：{}",
+                                    issue.source_row_number, issue.message_zh_tw
+                                )
+                            })
                             .collect::<Vec<_>>()
                             .join("；"),
                     )
@@ -122,9 +145,11 @@ async fn fetch_google_sheet_csv(
         .user_agent("GlucoseDashboard/0.1")
         .build()
         .map_err(|error| AppError::Internal(error.to_string()))?;
-    let response = client.get(&url).send().await.map_err(|error| {
-        AppError::Sync(format!("無法連線到 Google Sheet：{error}"))
-    })?;
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|error| AppError::Sync(format!("無法連線到 Google Sheet：{error}")))?;
     let status = response.status();
     let body = response
         .text()

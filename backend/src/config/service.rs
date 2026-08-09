@@ -14,14 +14,17 @@ pub fn configure(
     if sheet_id.trim().is_empty() {
         return Err(AppError::Invalid("Google Sheet ID 不可為空白。".into()));
     }
+    // 保留既有自訂事件與同步時間：configure() 只更新 Sheet 來源，不應清掉其他設定。
+    let existing = store.load();
     let config = LocalConfiguration {
-        schema_version: 1,
+        schema_version: 2,
         sheet_id: Some(sheet_id),
         sheet_gid,
         sheet_name: Some(sheet_name),
         fixture_path,
-        credential_reference: None,
-        last_successful_sync_at: None,
+        credential_reference: existing.credential_reference,
+        last_successful_sync_at: existing.last_successful_sync_at,
+        custom_events: existing.custom_events,
     };
     store.save(&config).map_err(AppError::Internal)?;
     Ok(config)
@@ -32,7 +35,9 @@ pub fn normalize_sheet_reference(input: &str) -> Option<(String, Option<String>)
     if trimmed.is_empty() {
         return None;
     }
-    if trimmed.starts_with("https://docs.google.com/spreadsheets/d/") || trimmed.starts_with("http://docs.google.com/spreadsheets/d/") {
+    if trimmed.starts_with("https://docs.google.com/spreadsheets/d/")
+        || trimmed.starts_with("http://docs.google.com/spreadsheets/d/")
+    {
         let without_prefix = trimmed.split("/d/").nth(1)?;
         let sheet_id = without_prefix.split('/').next()?;
         let sheet_gid = trimmed

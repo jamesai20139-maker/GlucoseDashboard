@@ -21,6 +21,7 @@ pub async fn sync(State(state): State<ApiState>) -> Result<Json<SyncResponse>, A
         sheet_gid: config.sheet_gid.clone(),
         sheet_name: config.sheet_name.clone(),
         fixture_path: config.fixture_path.clone().map(Into::into),
+        custom_events: config.custom_events.clone(),
     };
     let (records, issues, table_rows) = service.load().await?;
     // 強制重抓後寫入快取，讓後續切換區間不再重抓 Sheet。

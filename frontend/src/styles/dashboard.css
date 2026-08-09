@@ -38,6 +38,26 @@ button { cursor: pointer; border: 0; }
 .step-list, .note-list { margin: 0; padding-left: 20px; line-height: 1.7; color: #203760; font-size: 13px; }
 .step-list li + li, .note-list li + li { margin-top: 8px; }
 .guidance-card { background: #fbfdff; }
+.custom-events-card { border-color: #8db4ff; background: linear-gradient(180deg, #f5f9ff 0%, #ffffff 100%); }
+.custom-event-list { list-style: none; margin: 8px 0 12px; padding: 0; display: grid; gap: 6px; }
+.custom-event-list li { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid #d4ddec; border-radius: 12px; background: #f8faff; font-size: 13px; }
+.custom-event-label { font-weight: 700; color: #172b58; }
+.custom-event-threshold { color: #5a6b87; font-size: 12px; flex: 1; }
+.custom-event-remove { width: 28px; height: 28px; padding: 0; border: 1px solid #ef9aa6; border-radius: 8px; color: #9e2637; background: #fff0f2; font-size: 13px; }
+.custom-event-empty { color: #6f7fa0; font-style: italic; border: 0 !important; background: transparent !important; }
+.threshold-row { display: flex; align-items: center; gap: 8px; }
+.threshold-row label { flex: 1; display: grid; gap: 6px; font-size: 13px; font-weight: 700; color: #203760; }
+.threshold-row input { width: 100%; padding: 10px 12px; border: 1px solid #cbd7ea; border-radius: 12px; color: #172b58; background: #fff; }
+.custom-events-card { border-color: #8db4ff; background: linear-gradient(180deg, #f5f9ff 0%, #ffffff 100%); }
+.custom-event-list { list-style: none; margin: 8px 0 12px; padding: 0; display: grid; gap: 6px; }
+.custom-event-list li { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid #d4ddec; border-radius: 12px; background: #f8faff; font-size: 13px; }
+.custom-event-label { font-weight: 700; color: #172b58; }
+.custom-event-threshold { color: #5a6b87; font-size: 12px; flex: 1; }
+.custom-event-remove { width: 28px; height: 28px; padding: 0; border: 1px solid #ef9aa6; border-radius: 8px; color: #9e2637; background: #fff0f2; font-size: 13px; }
+.custom-event-empty { color: #6f7fa0; font-style: italic; border: 0 !important; background: transparent !important; }
+.threshold-row { display: flex; align-items: center; gap: 8px; }
+.threshold-row label { flex: 1; display: grid; gap: 6px; font-size: 13px; font-weight: 700; color: #203760; }
+.threshold-row input { width: 100%; padding: 10px 12px; border: 1px solid #cbd7ea; border-radius: 12px; color: #172b58; background: #fff; }
 .date-label { display: block; margin-top: 16px; font-weight: 700; }.date-label input { width: 100%; margin-top: 8px; padding: 11px; border: 1px solid #cbd7ea; border-radius: 12px; color: #172b58; }
 .refresh { width: 100%; margin-top: 16px; padding: 11px; border-radius: 12px; color: #fff; background: #1554ee; font-weight: 700; }.sync-status { margin: 12px 0 0; font-size: 13px; }.sync-status i { display: inline-block; width: 10px; height: 10px; margin-right: 4px; border-radius: 50%; background: #41b966; }
 .radio-row { display: block; padding: 8px 12px; border-radius: 12px; font-weight: 600; }.radio-row.selected { color: #123ea9; background: #e5efff; }.radio-row input { margin-right: 10px; accent-color: #1554ee; }
@@ -83,6 +103,14 @@ button { cursor: pointer; border: 0; }
 :root[data-theme="dark"] .step-list,
 :root[data-theme="dark"] .note-list { color: #cdd9ee; }
 :root[data-theme="dark"] .guidance-card { background: #142036; }
+:root[data-theme="dark"] .custom-events-card { border-color: #2f6df0; background: linear-gradient(180deg, #142036 0%, #121d33 100%); }
+:root[data-theme="dark"] .custom-event-list li { border-color: #2a3f63; background: #18243c; }
+:root[data-theme="dark"] .custom-event-label { color: #cdd9ee; }
+:root[data-theme="dark"] .custom-event-threshold { color: #8aa6d6; }
+:root[data-theme="dark"] .custom-event-remove { border-color: #5a2733; color: #f0a8b0; background: #2a1822; }
+:root[data-theme="dark"] .custom-event-empty { color: #6f7fa0; }
+:root[data-theme="dark"] .threshold-row label { color: #cdd9ee; }
+:root[data-theme="dark"] .threshold-row input { border-color: #2a3f63; color: #dde6f6; background: #0f1a2e; }
 :root[data-theme="dark"] .date-label { color: #cdd9ee; }
 :root[data-theme="dark"] .date-label input { border-color: #2a3f63; color: #dde6f6; background: #0f1a2e; }
 :root[data-theme="dark"] .radio-row.selected { color: #8ab4ff; background: #1c3055; }

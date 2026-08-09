@@ -61,7 +61,15 @@ pub fn build_router(config: ConfigStore) -> Router {
         .route("/api/health", get(|| async { "{\"status\":\"ok\"}" }))
         .route("/api/config/status", get(config_routes::status))
         .route("/api/configure", post(config_routes::configure))
-        .route("/api/config/test-connection", get(config_routes::test_connection))
+        .route("/api/custom-events", post(config_routes::add_custom_event))
+        .route(
+            "/api/custom-events/:label",
+            axum::routing::delete(config_routes::delete_custom_event),
+        )
+        .route(
+            "/api/config/test-connection",
+            get(config_routes::test_connection),
+        )
         .route("/api/sync", post(sync_routes::sync))
         .route("/api/dashboard", get(dashboard_routes::dashboard))
         .route("/api/records/export.csv", get(dashboard_routes::export_csv))
@@ -79,13 +87,14 @@ mod tests {
 
     fn config(sheet_id: Option<&str>, fixture: Option<&str>) -> LocalConfiguration {
         LocalConfiguration {
-            schema_version: 1,
+            schema_version: 2,
             sheet_id: sheet_id.map(str::to_string),
             sheet_gid: None,
             sheet_name: Some("Sheet1".into()),
             fixture_path: fixture.map(str::to_string),
             credential_reference: None,
             last_successful_sync_at: None,
+            custom_events: Vec::new(),
         }
     }
 

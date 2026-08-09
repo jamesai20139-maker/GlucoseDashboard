@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::router::ApiState;
 use crate::{
     analysis::{selection, summary},
-    domain::{AnalysisSelection, DashboardTableRow, Event, GlucoseRecord, Period},
+    domain::{AnalysisSelection, CustomEvent, DashboardTableRow, Event, GlucoseRecord, Period},
     errors::AppError,
     ingestion::sync_service::SyncService,
 };
@@ -20,14 +20,14 @@ pub struct DashboardQuery {
     pub search: Option<String>,
     pub period: Option<String>, // all | day | week | month | quarter
     pub start: Option<String>,  // YYYY-MM-DD（day 用）
-    pub end: Option<String>,   // YYYY-MM-DD（day 用）
+    pub end: Option<String>,    // YYYY-MM-DD（day 用）
     pub year: Option<i32>,      // week/month/quarter 用
     pub week: Option<u32>,      // week 用
     pub month: Option<u32>,     // month 用
     pub quarter: Option<u32>,   // quarter 用
 }
 
-fn selection(query: &DashboardQuery) -> AnalysisSelection {
+fn selection(query: &DashboardQuery, custom: &[CustomEvent]) -> AnalysisSelection {
     let period = match query.period.as_deref() {
         Some("day") => parse_day(&query.start, &query.end).unwrap_or(Period::All),
         Some("week") => query
@@ -52,7 +52,10 @@ fn selection(query: &DashboardQuery) -> AnalysisSelection {
     };
     AnalysisSelection {
         period,
-        event: query.event.as_deref().and_then(Event::parse),
+        event: query
+            .event
+            .as_deref()
+            .and_then(|label| Event::parse(label, custom)),
         search: query.search.clone(),
     }
 }
@@ -113,6 +116,7 @@ async fn load_records(
         sheet_gid: config.sheet_gid.clone(),
         sheet_name: config.sheet_name.clone(),
         fixture_path: config.fixture_path.map(Into::into),
+        custom_events: config.custom_events.clone(),
     };
     let (records, issues, table_rows) = service.load().await?;
     *state.records_cache.write().await = Some(super::router::RecordsCache {
@@ -128,7 +132,10 @@ async fn load_records(
 /// 篩選表格顯示列。有效列套用 period/event/search（與 `selection::filter` 同邏輯）；
 /// 錯誤列（任一 parsed 欄位為 None）只套用 search，不受 period/event 影響，
 /// 避免錯誤列因缺少有效日期/事件而消失。
-fn filter_table_rows(rows: &[DashboardTableRow], selection: &AnalysisSelection) -> Vec<DashboardTableRow> {
+fn filter_table_rows(
+    rows: &[DashboardTableRow],
+    selection: &AnalysisSelection,
+) -> Vec<DashboardTableRow> {
     let needle = selection.search.as_ref().map(|text| text.to_lowercase());
     rows.iter()
         .filter(|row| {
@@ -152,9 +159,23 @@ fn filter_table_rows(rows: &[DashboardTableRow], selection: &AnalysisSelection) 
         })
         .filter(|row| match &needle {
             Some(text) => {
-                row.measured_at.as_deref().unwrap_or("").to_lowercase().contains(text)
-                    || row.event.as_deref().unwrap_or("").to_lowercase().contains(text)
-                    || row.glucose_mg_dl.as_deref().unwrap_or("").to_lowercase().contains(text)
+                row.measured_at
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .contains(text)
+                    || row
+                        .event
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(text)
+                    || row
+                        .glucose_mg_dl
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(text)
                     || row.remark_1.to_lowercase().contains(text)
                     || row.remark_2.to_lowercase().contains(text)
             }
@@ -168,7 +189,8 @@ pub async fn dashboard(
     State(state): State<ApiState>,
     Query(query): Query<DashboardQuery>,
 ) -> Result<Json<DashboardResponse>, AppError> {
-    let chosen = selection(&query);
+    let config = state.config.load();
+    let chosen = selection(&query, &config.custom_events);
     let (records, table_rows, issues, last_sync) = load_records(&state, false).await?;
     let filtered = selection::filter(&records, &chosen);
     let summary = summary::calculate(&filtered);
@@ -188,7 +210,8 @@ pub async fn export_csv(
     State(state): State<ApiState>,
     Query(query): Query<DashboardQuery>,
 ) -> Result<Response, AppError> {
-    let chosen = selection(&query);
+    let config = state.config.load();
+    let chosen = selection(&query, &config.custom_events);
     let (records, _table_rows, _issues, _last_sync) = load_records(&state, false).await?;
     let records = selection::filter(&records, &chosen);
     let mut csv = String::from("血糖量測日期時間,事件,量測血糖值(mg/dl),備註1,備註2\n");
@@ -220,6 +243,11 @@ mod tests {
     use super::{load_records, selection, DashboardQuery};
     use crate::domain::{Event, Period};
 
+    /// 測試用：以空自訂事件清單呼叫 selection（內建事件行為不受影響）。
+    fn sel(query: &DashboardQuery) -> super::AnalysisSelection {
+        selection(query, &[])
+    }
+
     fn q(period: Option<&str>) -> DashboardQuery {
         DashboardQuery {
             event: None,
@@ -236,9 +264,9 @@ mod tests {
 
     #[test]
     fn missing_period_falls_back_to_all() {
-        assert_eq!(selection(&q(None)).period, Period::All);
-        assert_eq!(selection(&q(Some("all"))).period, Period::All);
-        assert_eq!(selection(&q(Some("unknown"))).period, Period::All);
+        assert_eq!(sel(&q(None)).period, Period::All);
+        assert_eq!(sel(&q(Some("all"))).period, Period::All);
+        assert_eq!(sel(&q(Some("unknown"))).period, Period::All);
     }
 
     #[test]
@@ -247,7 +275,7 @@ mod tests {
         query.start = Some("2026-03-01".into());
         query.end = Some("2026-03-31".into());
         assert_eq!(
-            selection(&query).period,
+            sel(&query).period,
             Period::Day {
                 start: chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
                 end: chrono::NaiveDate::from_ymd_opt(2026, 3, 31).unwrap(),
@@ -257,10 +285,10 @@ mod tests {
 
     #[test]
     fn day_missing_dates_falls_back_to_all() {
-        assert_eq!(selection(&q(Some("day"))).period, Period::All);
+        assert_eq!(sel(&q(Some("day"))).period, Period::All);
         let mut query = q(Some("day"));
         query.start = Some("2026-03-01".into());
-        assert_eq!(selection(&query).period, Period::All);
+        assert_eq!(sel(&query).period, Period::All);
     }
 
     #[test]
@@ -268,7 +296,7 @@ mod tests {
         let mut query = q(Some("day"));
         query.start = Some("2026-03-31".into());
         query.end = Some("2026-03-01".into());
-        assert_eq!(selection(&query).period, Period::All);
+        assert_eq!(sel(&query).period, Period::All);
     }
 
     #[test]
@@ -276,7 +304,13 @@ mod tests {
         let mut query = q(Some("week"));
         query.year = Some(2026);
         query.week = Some(5);
-        assert_eq!(selection(&query).period, Period::Week { year: 2026, week: 5 });
+        assert_eq!(
+            sel(&query).period,
+            Period::Week {
+                year: 2026,
+                week: 5
+            }
+        );
     }
 
     #[test]
@@ -284,7 +318,13 @@ mod tests {
         let mut query = q(Some("month"));
         query.year = Some(2026);
         query.month = Some(7);
-        assert_eq!(selection(&query).period, Period::Month { year: 2026, month: 7 });
+        assert_eq!(
+            sel(&query).period,
+            Period::Month {
+                year: 2026,
+                month: 7
+            }
+        );
     }
 
     #[test]
@@ -292,7 +332,13 @@ mod tests {
         let mut query = q(Some("quarter"));
         query.year = Some(2026);
         query.quarter = Some(2);
-        assert_eq!(selection(&query).period, Period::Quarter { year: 2026, quarter: 2 });
+        assert_eq!(
+            sel(&query).period,
+            Period::Quarter {
+                year: 2026,
+                quarter: 2
+            }
+        );
     }
 
     #[test]
@@ -300,7 +346,7 @@ mod tests {
         let mut query = q(Some("quarter"));
         query.year = Some(2026);
         query.quarter = Some(5);
-        assert_eq!(selection(&query).period, Period::All);
+        assert_eq!(sel(&query).period, Period::All);
     }
 
     #[test]
@@ -308,9 +354,9 @@ mod tests {
         let mut query = q(Some("all"));
         query.event = Some("空腹血糖".into());
         query.search = Some("abc".into());
-        let sel = selection(&query);
-        assert_eq!(sel.event, Some(Event::Fasting));
-        assert_eq!(sel.search.as_deref(), Some("abc"));
+        let s = sel(&query);
+        assert_eq!(s.event, Some(Event::Fasting));
+        assert_eq!(s.search.as_deref(), Some("abc"));
     }
 
     /// 建構一個指向 fixture 的 ApiState，用於驗證記憶體快取命中/失效。
@@ -324,7 +370,7 @@ mod tests {
             std::process::id()
         ));
         let config = crate::config::model::LocalConfiguration {
-            schema_version: 1,
+            schema_version: 2,
             sheet_id: None,
             sheet_gid: None,
             sheet_name: Some("Sheet1".into()),
@@ -335,6 +381,7 @@ mod tests {
             ),
             credential_reference: None,
             last_successful_sync_at: None,
+            custom_events: Vec::new(),
         };
         std::fs::write(&path, serde_json::to_string(&config).unwrap()).unwrap();
         std::env::set_var("GLUCOSE_CONFIG_PATH", &path);

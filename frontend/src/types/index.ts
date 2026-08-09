@@ -1,5 +1,12 @@
-export type EventName = '空腹血糖' | '午餐前' | '午餐後' | '晚餐前' | '晚餐後' | '睡前';
+export type EventName = string;
 export type Classification = 'Low' | 'InRange' | 'High';
+
+/// 自訂事件關鍵字（含使用者指定的閾值）。
+export interface CustomEventConfig {
+  label: string;
+  low_threshold: number;
+  high_threshold: number;
+}
 
 export interface GlucoseRecord {
   source_row_number: number;
@@ -49,6 +56,7 @@ export interface ConfigStatus {
   sheet_name: string | null;
   fixture_path: string | null;
   last_successful_sync_at: string | null;
+  custom_events: CustomEventConfig[];
 }
 
 export interface ConnectionTestReport {

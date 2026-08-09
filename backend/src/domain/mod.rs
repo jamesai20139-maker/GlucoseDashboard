@@ -3,6 +3,6 @@ pub mod records;
 
 pub use data_quality::{DataQualityIssue, IssueCode, IssueSeverity};
 pub use records::{
-    AnalysisSelection, AnalysisSummary, Classification, DashboardTableRow, Event, GlucoseRecord,
-    Period,
+    AnalysisSelection, AnalysisSummary, Classification, CustomEvent, DashboardTableRow, Event,
+    GlucoseRecord, Period,
 };

@@ -3,12 +3,12 @@ import { DashboardLayout } from '../components/layout/DashboardLayout';
 import { GlucoseRecordTable } from '../components/records/GlucoseRecordTable';
 import { SummaryCards } from '../components/summary/SummaryCards';
 import { GlucoseTrendChart } from '../components/trend/GlucoseTrendChart';
-import { configureDashboard, exportUrl, getConfigStatus, syncDashboard, testConnection, type PeriodSelection } from '../services/local_service';
+import { configureDashboard, exportUrl, getConfigStatus, syncDashboard, testConnection, addCustomEvent, deleteCustomEvent, type PeriodSelection } from '../services/local_service';
 import { useDashboard } from '../state/dashboard_store';
 import { useTheme } from '../state/use_theme';
-import type { ConfigStatus, ConnectionTestReport } from '../types';
+import type { ConfigStatus, ConnectionTestReport, CustomEventConfig } from '../types';
 
-const filters = [['', '全部'], ['空腹血糖', '空腹血糖'], ['午餐前', '午餐前'], ['午餐後', '午餐後'], ['晚餐前', '晚餐前'], ['晚餐後', '晚餐後'], ['睡前', '睡前']];
+const BUILTIN_FILTERS: [string, string][] = [['', '全部'], ['空腹血糖', '空腹血糖'], ['午餐前', '午餐前'], ['午餐後', '午餐後'], ['晚餐前', '晚餐前'], ['晚餐後', '晚餐後'], ['睡前', '睡前']];
 
 function configLabel(config: ConfigStatus | null): string {
   if (!config) return '尚未讀取設定';
@@ -42,6 +42,12 @@ export default function App() {
   const [testing, setTesting] = useState(false);
   const [connectionResult, setConnectionResult] = useState<ConnectionTestReport | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [customEvents, setCustomEvents] = useState<CustomEventConfig[]>([]);
+  const [newEventLabel, setNewEventLabel] = useState('');
+  const [newEventLow, setNewEventLow] = useState(70);
+  const [newEventHigh, setNewEventHigh] = useState(139);
+  const [eventError, setEventError] = useState<string | null>(null);
+  const [savingEvent, setSavingEvent] = useState(false);
 
   // 由目前時間區間選擇組裝 PeriodSelection，供 useDashboard 與匯出使用。
   const selection: PeriodSelection = useMemo(() => {
@@ -72,6 +78,7 @@ export default function App() {
     try {
       const next = await getConfigStatus();
       setConfig(next);
+      setCustomEvents(next.custom_events || []);
       if (!dirtyRef.current) {
         setSheetId(next.sheet_id || '');
         setSheetName(next.sheet_name || 'Sheet1');
@@ -122,6 +129,50 @@ export default function App() {
     }
   }
 
+  // 新增／更新自訂事件關鍵字。成功後重載設定與儀表板，讓篩選項目與分析即時反映。
+  async function handleAddCustomEvent(submitEvent: { preventDefault: () => void }) {
+    submitEvent.preventDefault();
+    setEventError(null);
+    setSavingEvent(true);
+    try {
+      const next = await addCustomEvent({
+        label: newEventLabel.trim(),
+        low_threshold: newEventLow,
+        high_threshold: newEventHigh,
+      });
+      setConfig(next);
+      setCustomEvents(next.custom_events);
+      setNewEventLabel('');
+      setNewEventLow(70);
+      setNewEventHigh(139);
+      await reload();
+    } catch (cause) {
+      setEventError(cause instanceof Error ? cause.message : '新增事件關鍵字失敗');
+    } finally {
+      setSavingEvent(false);
+    }
+  }
+
+  async function handleDeleteCustomEvent(label: string) {
+    setEventError(null);
+    try {
+      const next = await deleteCustomEvent(label);
+      setConfig(next);
+      setCustomEvents(next.custom_events);
+      // 若目前選中的事件被刪除，回到「全部」。
+      if (event === label) setEvent('');
+      await reload();
+    } catch (cause) {
+      setEventError(cause instanceof Error ? cause.message : '刪除事件關鍵字失敗');
+    }
+  }
+
+  // 側邊篩選項目：內建 6 個 + 使用者自訂關鍵字。
+  const filters = useMemo<[string, string][]>(
+    () => [...BUILTIN_FILTERS, ...customEvents.map((c) => [c.label, c.label] as [string, string])],
+    [customEvents],
+  );
+
   const setupSteps = useMemo(() => [
     '在 Google Sheet 右上角複製網址，找到 `/d/` 與 `/edit` 之間的字串，貼到「Sheet ID」。',
     '確認工作表名稱與實際分頁一致；如果只有一張表，可先保留 `Sheet1`。',
@@ -168,6 +219,27 @@ export default function App() {
         <p><span>來源</span><strong>{config?.fixture_path || 'Google Sheet 直讀'}</strong></p>
         <p><span>最後同步</span><strong>{config?.last_successful_sync_at ? config.last_successful_sync_at.slice(0, 16).replace('T', ' ') : '尚未同步'}</strong></p>
       </div>
+    </section>
+    <section className="side-section custom-events-card">
+      <h3>🏷　事件關鍵字設定</h3>
+      <p className="form-hint">新增自訂事件關鍵字後，事件欄填入相同字串的列會以您指定的閾值判定高低，並出現在側邊「篩選項目」。</p>
+      {eventError ? <p className="inline-error">{eventError}</p> : null}
+      <ul className="custom-event-list">
+        {customEvents.map((c) => <li key={c.label}><span className="custom-event-label">{c.label}</span><span className="custom-event-threshold">{c.low_threshold}～{c.high_threshold} mg/dL</span><button type="button" className="custom-event-remove" onClick={() => void handleDeleteCustomEvent(c.label)} aria-label={`刪除 ${c.label}`}>✕</button></li>)}
+        {customEvents.length === 0 ? <li className="custom-event-empty">尚未新增自訂事件關鍵字</li> : null}
+      </ul>
+      <form className="sheet-form" onSubmit={handleAddCustomEvent}>
+        <label>關鍵字<input value={newEventLabel} onChange={(e: { target: { value: string } }) => setNewEventLabel(e.target.value)} placeholder="例如：運動後" required /></label>
+        <div className="threshold-row">
+          <label>正常下限<input type="number" min={20} max={600} value={newEventLow} onChange={(e: { target: { value: string } }) => setNewEventLow(Number(e.target.value))} /></label>
+          <span className="range-sep">～</span>
+          <label>正常上限<input type="number" min={20} max={600} value={newEventHigh} onChange={(e: { target: { value: string } }) => setNewEventHigh(Number(e.target.value))} /></label>
+        </div>
+        <div className="form-actions">
+          <button type="submit" disabled={savingEvent}>{savingEvent ? '新增中…' : '新增關鍵字'}</button>
+        </div>
+        <p className="form-hint">閾值須介於 20–600，且下限須小於上限。同名關鍵字會覆蓋舊閾值。</p>
+      </form>
     </section>
     <section className="side-section guidance-card">
       <h3>📘　設定步驟</h3>
@@ -224,8 +296,8 @@ export default function App() {
     if (loading || configLoading) return <div className="state-card">正在讀取血糖資料與設定…</div>;
     if (error) return <div className="state-card error-state"><h2>同步失敗</h2><p>{error}</p><button type="button" onClick={() => void reload()}>重新嘗試</button></div>;
     if (!data) return <div className="state-card"><h2>尚未設定資料來源</h2><p>請先按右上角「設定」按鈕填寫 Google Sheet 設定，再按「儲存設定」與「立即更新」。</p></div>;
-    return <><SummaryCards summary={data.summary} /><GlucoseTrendChart records={data.records} /><GlucoseRecordTable rows={data.table_rows} search={search} onSearch={setSearch} onExport={() => { window.location.href = exportUrl(selection, event || undefined, search || undefined); }} /></>;
-  }, [configLoading, data, error, event, loading, selection, reload, search]);
+    return <><SummaryCards summary={data.summary} /><GlucoseTrendChart records={data.records} customEvents={customEvents} /><GlucoseRecordTable rows={data.table_rows} search={search} onSearch={setSearch} onExport={() => { window.location.href = exportUrl(selection, event || undefined, search || undefined); }} /></>;
+  }, [configLoading, customEvents, data, error, event, loading, selection, reload, search]);
 
   return <DashboardLayout sidebar={sidebar} onOpenSettings={() => setSettingsOpen(true)} theme={theme} onToggleTheme={toggleTheme}>{content}{settingsOpen ? <div className="settings-overlay" role="dialog" aria-modal="true" aria-label="設定"><div className="settings-modal"><div className="settings-modal-header"><h2>⚙　設定</h2><button className="settings-close" type="button" aria-label="關閉" onClick={() => setSettingsOpen(false)}>✕</button></div><div className="settings-modal-body">{settingsPanel}</div></div></div> : null}</DashboardLayout>;
 }

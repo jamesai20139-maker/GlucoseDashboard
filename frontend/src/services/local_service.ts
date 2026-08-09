@@ -12,6 +12,36 @@ export async function getConfigStatus(): Promise<ConfigStatus> {
   return response.json() as Promise<ConfigStatus>;
 }
 
+/// 新增或更新自訂事件關鍵字。同 label 會覆蓋既有閾值。
+export async function addCustomEvent(payload: {
+  label: string;
+  low_threshold: number;
+  high_threshold: number;
+}): Promise<ConfigStatus> {
+  const response = await fetch('/api/custom-events', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || '新增事件關鍵字失敗');
+  }
+  return response.json() as Promise<ConfigStatus>;
+}
+
+/// 刪除指定 label 的自訂事件關鍵字。
+export async function deleteCustomEvent(label: string): Promise<ConfigStatus> {
+  const response = await fetch(`/api/custom-events/${encodeURIComponent(label)}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || '刪除事件關鍵字失敗');
+  }
+  return response.json() as Promise<ConfigStatus>;
+}
+
 export async function configureDashboard(payload: ConfigurePayload): Promise<ConfigStatus> {
   const response = await fetch('/api/configure', {
     method: 'POST',
