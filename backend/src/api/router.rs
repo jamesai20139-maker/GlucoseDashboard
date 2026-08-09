@@ -67,6 +67,10 @@ pub fn build_router(config: ConfigStore) -> Router {
             axum::routing::delete(config_routes::delete_custom_event),
         )
         .route(
+            "/api/event-thresholds",
+            post(config_routes::update_event_thresholds),
+        )
+        .route(
             "/api/config/test-connection",
             get(config_routes::test_connection),
         )
@@ -95,6 +99,7 @@ mod tests {
             credential_reference: None,
             last_successful_sync_at: None,
             custom_events: Vec::new(),
+            event_thresholds: Vec::new(),
         }
     }
 

@@ -16,8 +16,8 @@ pub fn configure(
     }
     // 保留既有自訂事件與同步時間：configure() 只更新 Sheet 來源，不應清掉其他設定。
     let existing = store.load();
-    let config = LocalConfiguration {
-        schema_version: 2,
+    let mut config = LocalConfiguration {
+        schema_version: crate::config::model::CURRENT_SCHEMA_VERSION,
         sheet_id: Some(sheet_id),
         sheet_gid,
         sheet_name: Some(sheet_name),
@@ -25,7 +25,11 @@ pub fn configure(
         credential_reference: existing.credential_reference,
         last_successful_sync_at: existing.last_successful_sync_at,
         custom_events: existing.custom_events,
+        // 保留既有閾值；configure() 只更新 Sheet 來源，不重設顯示標準。
+        event_thresholds: existing.event_thresholds,
     };
+    // 確保閾值正規化（補齊內建、排序）並維持目前 schema 版本。
+    config.normalize();
     store.save(&config).map_err(AppError::Internal)?;
     Ok(config)
 }

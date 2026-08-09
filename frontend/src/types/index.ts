@@ -8,6 +8,14 @@ export interface CustomEventConfig {
   high_threshold: number;
 }
 
+/// 單一事件的前端顯示標準範圍。趨勢圖與表格上色的唯一來源；
+/// 不影響後端摘要統計（摘要仍用內建醫學標準）。
+export interface EventThreshold {
+  label: string;
+  low: number;
+  high: number;
+}
+
 export interface GlucoseRecord {
   source_row_number: number;
   measured_at: string;
@@ -57,6 +65,7 @@ export interface ConfigStatus {
   fixture_path: string | null;
   last_successful_sync_at: string | null;
   custom_events: CustomEventConfig[];
+  event_thresholds: EventThreshold[];
 }
 
 export interface ConnectionTestReport {

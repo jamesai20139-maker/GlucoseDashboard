@@ -16,11 +16,19 @@ impl Default for ConfigStore {
 }
 
 impl ConfigStore {
+    /// 以指定路徑建構（主要供測試注入，避免並行測試經環境變數競爭同一設定檔）。
+    pub fn from_path(path: PathBuf) -> Self {
+        Self { path }
+    }
+
     pub fn load(&self) -> LocalConfiguration {
-        fs::read_to_string(&self.path)
+        let mut config: LocalConfiguration = fs::read_to_string(&self.path)
             .ok()
             .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // 舊設定檔 migration：補齊內建閾值、去重、排序、升 schema 版本。
+        config.normalize();
+        config
     }
 
     pub fn save(&self, config: &LocalConfiguration) -> Result<(), String> {

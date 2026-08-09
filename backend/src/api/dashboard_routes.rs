@@ -359,15 +359,18 @@ mod tests {
         assert_eq!(s.search.as_deref(), Some("abc"));
     }
 
-    /// 建構一個指向 fixture 的 ApiState，用於驗證記憶體快取命中/失效。
+    /// 建構一個指向 fixture 的 ApiState，用於驗證記憶體快取命中/失效。每次呼叫
+    /// 產生唯一路徑並直接注入 `ConfigStore`，避免並行測試經環境變數競爭同一檔案。
     fn fixture_state() -> super::super::router::ApiState {
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
         use tokio::sync::RwLock;
-        // 暫存還原指標：測試間不並行污染。
-        // 使用進程唯一路徑，避免測試間或與其他行程衝突。
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
         let path = std::env::temp_dir().join(format!(
-            "glucose-dashboard-cache-test-{}.json",
-            std::process::id()
+            "glucose-dashboard-cache-test-{}-{}.json",
+            std::process::id(),
+            n
         ));
         let config = crate::config::model::LocalConfiguration {
             schema_version: 2,
@@ -382,11 +385,11 @@ mod tests {
             credential_reference: None,
             last_successful_sync_at: None,
             custom_events: Vec::new(),
+            event_thresholds: Vec::new(),
         };
         std::fs::write(&path, serde_json::to_string(&config).unwrap()).unwrap();
-        std::env::set_var("GLUCOSE_CONFIG_PATH", &path);
         super::super::router::ApiState {
-            config: crate::config::store::ConfigStore::default(),
+            config: crate::config::store::ConfigStore::from_path(path),
             records_cache: Arc::new(RwLock::new(None)),
         }
     }
