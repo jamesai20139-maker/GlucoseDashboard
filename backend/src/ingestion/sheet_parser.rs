@@ -140,20 +140,22 @@ pub fn parse_csv(
     Vec<DataQualityIssue>,
     Vec<DashboardTableRow>,
 ) {
-    let mut lines = text.lines();
-    let headers = lines
+    // 使用 csv crate 正確解析 RFC 4180 CSV，避免備註欄位內含逗號或引號時
+    // 被簡單 split(',') 拆錯欄位（例如「早餐,2顆藥」被切成兩欄）。
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true)
+        .trim(csv::Trim::All)
+        .from_reader(text.as_bytes());
+    let mut rows_iter = reader.records();
+    let headers = rows_iter
         .next()
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .map(String::from)
-        .collect::<Vec<_>>();
-    let rows = lines
-        .map(|line| {
-            line.split(',')
-                .map(|value| value.trim().trim_matches('"').to_string())
-                .collect::<Vec<_>>()
-        })
+        .and_then(|result| result.ok())
+        .map(|record| record.iter().map(String::from).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let rows = rows_iter
+        .filter_map(|result| result.ok())
+        .map(|record| record.iter().map(String::from).collect::<Vec<_>>())
         .collect::<Vec<_>>();
     parse_rows(&headers, &rows, custom)
 }
@@ -236,6 +238,22 @@ mod tests {
             crate::domain::Classification::InRange
         );
         assert_eq!(records[2].classify(), crate::domain::Classification::High);
+    }
+
+    #[test]
+    fn remarks_with_commas_stay_in_correct_column() {
+        // 備註欄位內含逗號時，必須整段留在同一欄，不能被拆到備註2。
+        let csv_text = "血糖量測日期時間,事件,量測血糖值(mg/dl),備註1,備註2\n\
+            2026/07/07 06:30,空腹血糖,99,\"早餐,2顆藥\",\n\
+            2026/07/07 12:30,午餐前,100,\"飯前,半顆\",\"飯後,完整\"\n";
+        let (records, _issues, table_rows) = parse_csv(csv_text, &[]);
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].remark_1, "早餐,2顆藥");
+        assert_eq!(records[0].remark_2, "");
+        assert_eq!(records[1].remark_1, "飯前,半顆");
+        assert_eq!(records[1].remark_2, "飯後,完整");
+        assert_eq!(table_rows[0].remark_1, "早餐,2顆藥");
+        assert_eq!(table_rows[1].remark_2, "飯後,完整");
     }
 
     #[test]
