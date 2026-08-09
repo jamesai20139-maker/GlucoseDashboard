@@ -8,14 +8,23 @@
 #
 #CLIPROXYAPI_BASE_URL="http://127.0.0.1:8317"
 # 若未明確設定 BASE_URL，自動以 WSL nameserver IP 推導 Windows host 位址。
-if [ -z "${CLIPROXYAPI_BASE_URL:-}" ]; then
-  WIN_HOST_IP=$(awk '/nameserver/ {print $2}' /etc/resolv.conf)
-  CLIPROXYAPI_BASE_URL="http://${WIN_HOST_IP}:8317"
+# 自動取得 Windows Host IP
+WIN_HOST_IP=$(ip route | awk '/default/ {print $3; exit}')
+
+if [ -z "$WIN_HOST_IP" ]; then
+    echo "錯誤：無法取得 Windows Host IP"
+    return 1 2>/dev/null || exit 1
 fi
-# 確保 token 已設定；未設定時提示如何設定，避免 alias 帶空 token 呼叫。
+
+CLIPROXYAPI_BASE_URL="http://${WIN_HOST_IP}:8317"
+
+# CLIProxy API Token
 if [ -z "${CLIPROXYAPI_AUTH_TOKEN:-}" ]; then
-  echo "cli.sh：尚未設定 CLIPROXYAPI_AUTH_TOKEN，請先執行 export CLIPROXYAPI_AUTH_TOKEN=\"<你的 token>\"" >&2
+    echo "錯誤：CLIPROXYAPI_AUTH_TOKEN 尚未設定"
+    return 1 2>/dev/null || exit 1
 fi
+
+echo "CLIProxy: $CLIPROXYAPI_BASE_URL"
 # 以 gpt-5.6-sol (370K context) 為主線，旁支用 gpt-5.6-luna (370K context) 跑子代理！
 # 注意: gpt-5.6 在 Codex 最大只有 371K Context Window，但是 OpenAI API 則有完整的 1M Tokens
 alias claudex='\
@@ -161,3 +170,28 @@ ENABLE_TOOL_SEARCH=false \
 ANTHROPIC_BASE_URL=$CLIPROXYAPI_BASE_URL \
 ANTHROPIC_AUTH_TOKEN=$CLIPROXYAPI_AUTH_TOKEN \
 claude --model gemini-3.5-flash"
+
+cliproxy-check() {
+    echo "=========================================="
+    echo "CLIProxy Connection Check"
+    echo "=========================================="
+
+    printf 'BASE_URL : %s\n' "${CLIPROXYAPI_BASE_URL:-<未設定>}"
+
+    if [ -n "${CLIPROXYAPI_AUTH_TOKEN:-}" ]; then
+        printf 'TOKEN    : %s...\n' "${CLIPROXYAPI_AUTH_TOKEN:0:8}"
+    else
+        echo "TOKEN    : <未設定>"
+    fi
+
+    WIN_HOST_IP=$(awk '/nameserver/ {print $2; exit}' /etc/resolv.conf)
+    printf 'WSL HOST : %s\n' "$WIN_HOST_IP"
+
+    echo
+    echo "Testing API..."
+
+    curl -sS \
+        -w '\nHTTP Status: %{http_code}\n' \
+        "$CLIPROXYAPI_BASE_URL/v1/models" \
+        -H "Authorization: Bearer $CLIPROXYAPI_AUTH_TOKEN"
+}
