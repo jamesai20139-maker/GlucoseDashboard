@@ -63,7 +63,7 @@ pub fn build_router(config: ConfigStore) -> Router {
         .route("/api/configure", post(config_routes::configure))
         .route("/api/custom-events", post(config_routes::add_custom_event))
         .route(
-            "/api/custom-events/:label",
+            "/api/custom-events/{label}",
             axum::routing::delete(config_routes::delete_custom_event),
         )
         .route(
