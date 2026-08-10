@@ -153,6 +153,12 @@ button { cursor: pointer; border: 0; }
 :root[data-theme="dark"] .zone-low { fill: #2e2710; opacity: .55; }
 :root[data-theme="dark"] .threshold-label { fill: #8aa6d6; }
 :root[data-theme="dark"] .point { stroke: #142036; fill: #4f8cff; }
+/* 暗色模式事件節點上色:必須補上 .high/.normal/.low 覆寫,否則上方
+   `:root[data-theme="dark"] .point` 特異性 (0,3,0) 會壓過亮色 `.point.high` (0,2,0),
+   導致所有節點變藍、紅/綠/黃依事件標準的上色失效。這三條規則特異性 (0,4,0)。*/
+:root[data-theme="dark"] .point.high { fill: #ff5a6a; }
+:root[data-theme="dark"] .point.normal { fill: #46c26a; }
+:root[data-theme="dark"] .point.low { fill: #f1cf5e; }
 :root[data-theme="dark"] th { background: #1b2c4d; color: #cdd9ee; }
 :root[data-theme="dark"] th, :root[data-theme="dark"] td { border-color: #243657; color: #dde6f6; }
 :root[data-theme="dark"] .table-tools input { border-color: #2a3f63; color: #dde6f6; background: #0f1a2e; }

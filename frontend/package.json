@@ -10,14 +10,17 @@
     "preview": "node node_modules/vite/bin/vite.js preview"
   },
   "dependencies": {
+    "@testing-library/jest-dom": "latest",
+    "@testing-library/react": "latest",
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "typescript": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "vitest": "latest",
-    "@testing-library/react": "latest",
-    "@testing-library/jest-dom": "latest"
+    "typescript": "latest",
+    "vite": "latest",
+    "vitest": "latest"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "happy-dom": "^20.11.2"
+  }
 }
