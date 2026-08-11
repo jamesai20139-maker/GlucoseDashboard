@@ -8,15 +8,15 @@
   使用者 PATH，最後直接啟動 Dashboard（後端會自動開啟瀏覽器）。
   不會覆蓋既有的設定檔 .glucose-dashboard.json。
 .PARAMETER Repo
-  GitHub 倉庫（owner/repo），預設 gaistudio138/GlucoseDashboard。
+  GitHub 倉庫（owner/repo），預設 jamesai20139-maker/GlucoseDashboard。
 .PARAMETER NoLaunch
   安裝完成後不自動啟動。
 .EXAMPLE
-  irm https://raw.githubusercontent.com/gaistudio138/GlucoseDashboard/main/installer/get.ps1 | iex
+  irm https://raw.githubusercontent.com/jamesai20139-maker/GlucoseDashboard/main/installer/get.ps1 | iex
 #>
 [CmdletBinding()]
 param(
-    [string]$Repo = 'gaistudio138/GlucoseDashboard',
+    [string]$Repo = 'jamesai20139-maker/GlucoseDashboard',
     [switch]$NoLaunch
 )
 

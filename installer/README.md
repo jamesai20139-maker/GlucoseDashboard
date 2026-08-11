@@ -10,7 +10,7 @@
 在 PowerShell 貼上並執行：
 
 ```powershell
-irm https://raw.githubusercontent.com/gaistudio138/GlucoseDashboard/main/installer/get.ps1 | iex
+irm https://raw.githubusercontent.com/jamesai20139-maker/GlucoseDashboard/main/installer/get.ps1 | iex
 ```
 
 腳本會：
@@ -31,18 +31,18 @@ glucose-dashboard
 ## 僅安裝不啟動
 
 ```powershell
-irm https://raw.githubusercontent.com/gaistudio138/GlucoseDashboard/main/installer/get.ps1 | iex -NoLaunch
+irm https://raw.githubusercontent.com/jamesai20139-maker/GlucoseDashboard/main/installer/get.ps1 | iex -NoLaunch
 ```
 
 > 注意：`irm ... | iex` 管道無法直接傳參數；如需 `-NoLaunch` 等參數，請先
 > 下載腳本再以點號執行：
 > ```powershell
-> & (irm https://raw.githubusercontent.com/gaistudio138/GlucoseDashboard/main/installer/get.ps1) -NoLaunch
+> & (irm https://raw.githubusercontent.com/jamesai20139-maker/GlucoseDashboard/main/installer/get.ps1) -NoLaunch
 > ```
 
 ## 手動安裝
 
-1. 至 [Releases](https://github.com/gaistudio138/GlucoseDashboard/releases) 下載
+1. 至 [Releases](https://github.com/jamesai20139-maker/GlucoseDashboard/releases) 下載
    `glucose-dashboard.exe`。
 2. 放到 `%LOCALAPPDATA%\GlucoseDashboard`。
 3. 將該目錄加入使用者 `PATH`。

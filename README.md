@@ -9,7 +9,7 @@
 在 PowerShell 執行：
 
 ```powershell
-irm https://raw.githubusercontent.com/gaistudio138/GlucoseDashboard/main/installer/get.ps1 | iex
+irm https://raw.githubusercontent.com/jamesai20139-maker/GlucoseDashboard/main/installer/get.ps1 | iex
 ```
 
 腳本會下載最新版的單一可執行檔（前端已嵌入）、安裝到
@@ -32,3 +32,4 @@ make test    # 後端 cargo test + 前端型別檢查 / build
 ```bash
 git tag v0.2.0 && git push origin v0.2.0
 ```
+（首次發布前先把 repo 設為 public，並確認帳號未受限制，否則 raw 安裝連結與 Actions 皆無法對外生效。）
