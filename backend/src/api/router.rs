@@ -121,10 +121,8 @@ async fn serve_from_disk(uri: Uri) -> axum::response::Response {
                     .unwrap_or(HeaderValue::from_static("application/octet-stream")),
             );
             if path.is_empty() || path == "index.html" {
-                resp.headers_mut().insert(
-                    header::CACHE_CONTROL,
-                    HeaderValue::from_static("no-cache"),
-                );
+                resp.headers_mut()
+                    .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
             }
             resp
         }
@@ -137,10 +135,8 @@ async fn serve_from_disk(uri: Uri) -> axum::response::Response {
                         header::CONTENT_TYPE,
                         HeaderValue::from_static("text/html; charset=utf-8"),
                     );
-                    resp.headers_mut().insert(
-                        header::CACHE_CONTROL,
-                        HeaderValue::from_static("no-cache"),
-                    );
+                    resp.headers_mut()
+                        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
                     resp
                 }
                 Err(_) => (StatusCode::NOT_FOUND, "frontend not built").into_response(),
@@ -188,10 +184,8 @@ async fn serve_embedded(uri: Uri) -> axum::response::Response {
             );
             // index.html 不快取，確保更新後立即套用新版；其餘資源可長快取。
             if asset_path == "index.html" {
-                resp.headers_mut().insert(
-                    header::CACHE_CONTROL,
-                    HeaderValue::from_static("no-cache"),
-                );
+                resp.headers_mut()
+                    .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
             }
             resp
         }

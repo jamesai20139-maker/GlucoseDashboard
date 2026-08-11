@@ -186,9 +186,9 @@ pub async fn update_event_thresholds(
             return Err(AppError::Invalid("事件標準值的事件名稱不可為空。".into()));
         }
         if !allowed.iter().any(|a| a == &label) {
-            return Err(AppError::Invalid(
-                format!("事件「{label}」非內建或現存自訂事件，無法設定標準值。"),
-            ));
+            return Err(AppError::Invalid(format!(
+                "事件「{label}」非內建或現存自訂事件，無法設定標準值。"
+            )));
         }
         if seen.iter().any(|s| s == &label) {
             return Err(AppError::Invalid(format!("事件「{label}」重複出現。")));
@@ -198,17 +198,17 @@ pub async fn update_event_thresholds(
             return Err(AppError::Invalid("閾值須介於 20–600。".into()));
         }
         if t.low >= t.high {
-            return Err(AppError::Invalid(
-                "正常下限須小於上限。".into(),
-            ));
+            return Err(AppError::Invalid("正常下限須小於上限。".into()));
         }
     }
 
     // 提交集合須完整：6 內建 + 全部現存自訂事件。
     for required in &allowed {
-        if !request.event_thresholds.iter().any(|t| {
-            t.label.trim() == required.trim()
-        }) {
+        if !request
+            .event_thresholds
+            .iter()
+            .any(|t| t.label.trim() == required.trim())
+        {
             return Err(AppError::Invalid(format!(
                 "缺少事件「{required}」的標準值，需包含全部內建與自訂事件。"
             )));
@@ -327,7 +327,11 @@ mod tests {
     }
 
     fn threshold(label: &str, low: i32, high: i32) -> EventThreshold {
-        EventThreshold { label: label.into(), low, high }
+        EventThreshold {
+            label: label.into(),
+            low,
+            high,
+        }
     }
 
     #[tokio::test]
@@ -360,7 +364,10 @@ mod tests {
         // 設定檔持久化：重新載入仍應有該事件與閾值。
         let reloaded = state.config.load();
         assert_eq!(reloaded.custom_events.len(), 1);
-        assert!(reloaded.event_thresholds.iter().any(|t| t.label == "運動後"));
+        assert!(reloaded
+            .event_thresholds
+            .iter()
+            .any(|t| t.label == "運動後"));
     }
 
     #[tokio::test]
@@ -603,7 +610,9 @@ mod tests {
         list.push(threshold("空腹血糖", 70, 99));
         let result = super::update_event_thresholds(
             axum::extract::State(state),
-            axum::Json(UpdateEventThresholdsRequest { event_thresholds: list }),
+            axum::Json(UpdateEventThresholdsRequest {
+                event_thresholds: list,
+            }),
         )
         .await;
         assert!(matches!(result, Err(AppError::Invalid(_))));
@@ -616,7 +625,9 @@ mod tests {
         let list = six_builtins_with("運動後", 19, 139);
         let result = super::update_event_thresholds(
             axum::extract::State(state.clone()),
-            axum::Json(UpdateEventThresholdsRequest { event_thresholds: list }),
+            axum::Json(UpdateEventThresholdsRequest {
+                event_thresholds: list,
+            }),
         )
         .await;
         assert!(matches!(result, Err(AppError::Invalid(_))));
@@ -624,7 +635,9 @@ mod tests {
         let list = six_builtins_with("運動後", 70, 601);
         let result = super::update_event_thresholds(
             axum::extract::State(state),
-            axum::Json(UpdateEventThresholdsRequest { event_thresholds: list }),
+            axum::Json(UpdateEventThresholdsRequest {
+                event_thresholds: list,
+            }),
         )
         .await;
         assert!(matches!(result, Err(AppError::Invalid(_))));
@@ -636,7 +649,9 @@ mod tests {
         let list = six_builtins_with("運動後", 140, 140);
         let result = super::update_event_thresholds(
             axum::extract::State(state),
-            axum::Json(UpdateEventThresholdsRequest { event_thresholds: list }),
+            axum::Json(UpdateEventThresholdsRequest {
+                event_thresholds: list,
+            }),
         )
         .await;
         assert!(matches!(result, Err(AppError::Invalid(_))));

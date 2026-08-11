@@ -362,8 +362,8 @@ mod tests {
     /// 建構一個指向 fixture 的 ApiState，用於驗證記憶體快取命中/失效。每次呼叫
     /// 產生唯一路徑並直接注入 `ConfigStore`，避免並行測試經環境變數競爭同一檔案。
     fn fixture_state() -> super::super::router::ApiState {
-        use std::sync::Arc;
         use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
         use tokio::sync::RwLock;
         static COUNTER: AtomicU32 = AtomicU32::new(0);
         let n = COUNTER.fetch_add(1, Ordering::SeqCst);

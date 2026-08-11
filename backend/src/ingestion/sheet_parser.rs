@@ -1,4 +1,4 @@
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 
 use crate::domain::{
     CustomEvent, DashboardTableRow, DataQualityIssue, Event, GlucoseRecord, IssueCode,
@@ -23,10 +23,97 @@ fn issue(row: usize, severity: IssueSeverity, code: IssueCode, message: &str) ->
 }
 
 pub fn parse_date(value: &str) -> Option<DateTime<Utc>> {
-    ["%Y/%m/%d %H:%M", "%Y-%m-%d %H:%M"]
+    let trimmed = value.trim();
+    // 純數字 24 小時制格式（分鐘或帶秒）。chrono 對數字欄位寬度寬鬆，
+    // 不補零的 "2026/8/7 14:30" 亦可解析。
+    let numeric_formats = [
+        "%Y/%m/%d %H:%M",
+        "%Y-%m-%d %H:%M",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+    ];
+    if let Some(dt) = numeric_formats
         .iter()
-        .find_map(|format| NaiveDateTime::parse_from_str(value.trim(), format).ok())
-        .map(|value| DateTime::<Utc>::from_naive_utc_and_offset(value, Utc))
+        .find_map(|format| NaiveDateTime::parse_from_str(trimmed, format).ok())
+    {
+        return Some(DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc));
+    }
+    // Google Sheets zh-TW 本地化匯出格式，例如 "2026/8/7 下午 12:04:00"：
+    // 日期以 / 或 - 分隔且不補零、12 小時制、含「上午/下午」中文、可能帶秒。
+    // chrono 的 %p 僅認英文 AM/PM，無法直接處理中文，故手動解析。
+    parse_localized_zh_tw(trimmed).map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc))
+}
+
+/// 解析 Google Sheets zh-TW 本地化日期時間字串。
+fn parse_localized_zh_tw(value: &str) -> Option<NaiveDateTime> {
+    let value = value.trim();
+    // 以第一個空白切出日期段與剩餘時間段（日期段不含空白）。
+    let (date_part, rest) = value.split_once(' ')?;
+    let rest = rest.trim();
+    // 偵測「上午/下午」 meridiem；不存在則視為 24 小時制。
+    let (time_part, meridiem) = if let Some(time) = rest.strip_prefix("上午") {
+        (time.trim(), Some(false))
+    } else if let Some(time) = rest.strip_prefix("下午") {
+        (time.trim(), Some(true))
+    } else {
+        (rest, None)
+    };
+    let (year, month, day) = parse_date_components(date_part)?;
+    let (hour, minute, second) = parse_time_components(time_part)?;
+    let hour24 = match meridiem {
+        None => {
+            if hour > 23 {
+                return None;
+            }
+            hour
+        }
+        Some(is_pm) => to_24h(hour, is_pm)?,
+    };
+    NaiveDate::from_ymd_opt(year, month, day)?.and_hms_opt(hour24, minute, second)
+}
+
+/// 解析日期段 `2026/8/7` 或 `2026-8-7`（不補零，/ 或 - 分隔）。
+fn parse_date_components(s: &str) -> Option<(i32, u32, u32)> {
+    let parts: Vec<&str> = s.split(['/', '-']).collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let year = parts[0].parse::<i32>().ok()?;
+    let month = parts[1].parse::<u32>().ok()?;
+    let day = parts[2].parse::<u32>().ok()?;
+    Some((year, month, day))
+}
+
+/// 解析時間段 `12:04:00` 或 `6:30`（不補零，秒數可有可無）。
+/// 僅檢查分秒範圍；時的範圍由呼叫端依 12/24 小時制各自驗證。
+fn parse_time_components(s: &str) -> Option<(u32, u32, u32)> {
+    let parts: Vec<&str> = s.split(':').collect();
+    if parts.len() < 2 || parts.len() > 3 {
+        return None;
+    }
+    let hour = parts[0].parse::<u32>().ok()?;
+    let minute = parts[1].parse::<u32>().ok()?;
+    let second = parts
+        .get(2)
+        .and_then(|p| p.parse::<u32>().ok())
+        .unwrap_or(0);
+    if minute > 59 || second > 59 {
+        return None;
+    }
+    Some((hour, minute, second))
+}
+
+/// 將 12 小時制時數轉為 24 小時制。`hour12` 須為 1..=12。
+fn to_24h(hour12: u32, is_pm: bool) -> Option<u32> {
+    if !(1..=12).contains(&hour12) {
+        return None;
+    }
+    Some(match (hour12, is_pm) {
+        (12, false) => 0, // 上午 12 → 半夜 0 時
+        (12, true) => 12, // 下午 12 → 中午 12 時
+        (h, false) => h,
+        (h, true) => h + 12,
+    })
 }
 
 /// 判斷血糖值是否有效（整數且在 20–600）。
@@ -254,6 +341,78 @@ mod tests {
         assert_eq!(records[1].remark_2, "飯後,完整");
         assert_eq!(table_rows[0].remark_1, "早餐,2顆藥");
         assert_eq!(table_rows[1].remark_2, "飯後,完整");
+    }
+
+    #[test]
+    fn parses_google_sheets_zh_tw_localized_dates() {
+        // Google Sheets zh-TW 匯出格式：不補零日期、12 小時制、含「上午/下午」、帶秒。
+        // 上午 7:11:00 → 07:11:00 UTC；下午 12:04:00 → 12:04:00 UTC；
+        // 上午 12:00:00 → 半夜 0 時。
+        let rows = vec![
+            vec![
+                "2026/8/7 上午 7:11:00".into(),
+                "空腹血糖".into(),
+                "90".into(),
+            ],
+            vec![
+                "2026/8/7 下午 12:04:00".into(),
+                "午餐後".into(),
+                "140".into(),
+            ],
+            vec!["2026/8/7 上午 12:00:00".into(), "睡前".into(), "100".into()],
+        ];
+        let (records, issues, _table_rows) = parse_rows(&headers(), &rows, &[]);
+        assert_eq!(records.len(), 3);
+        assert!(issues.is_empty());
+        assert_eq!(
+            records[0].measured_at.format("%H:%M:%S").to_string(),
+            "07:11:00"
+        );
+        assert_eq!(
+            records[1].measured_at.format("%H:%M:%S").to_string(),
+            "12:04:00"
+        );
+        assert_eq!(
+            records[2].measured_at.format("%H:%M:%S").to_string(),
+            "00:00:00"
+        );
+    }
+
+    #[test]
+    fn parses_numeric_formats_with_seconds_and_unpadded() {
+        // 帶秒純數字格式（/ 與 - 分隔）與不補零日期皆可解析。
+        let cases = [
+            ("2026/8/7 14:30:00", "14:30:00"),
+            ("2026-8-7 6:5:9", "06:05:09"),
+            ("2026/8/7 上午 7:11:00", "07:11:00"),
+            ("2026-8-7 下午 11:59:00", "23:59:00"),
+        ];
+        for (input, expected) in cases {
+            let dt = parse_date(input).unwrap_or_else(|| panic!("應可解析 {input:?}"));
+            assert_eq!(
+                dt.format("%H:%M:%S").to_string(),
+                expected,
+                "input={input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_meridiem_hours_produce_no_date() {
+        // 12 小時制時數須在 1..=12 之外為無效；24 小時制時數須 <=23。
+        // 解析失敗 → 表格 measured_at 為 None、列入 issue，而非顯示錯誤值。
+        let rows = vec![
+            vec!["2026/8/7 下午 0:00".into(), "空腹血糖".into(), "90".into()],
+            vec!["2026/8/7 下午 13:00".into(), "空腹血糖".into(), "90".into()],
+            vec!["2026/8/7 25:00".into(), "空腹血糖".into(), "90".into()],
+        ];
+        let (records, issues, table_rows) = parse_rows(&headers(), &rows, &[]);
+        assert_eq!(records.len(), 0);
+        assert_eq!(issues.len(), 3);
+        assert!(table_rows.iter().all(|r| r.measured_at.is_none()));
+        assert!(issues
+            .iter()
+            .all(|i| i.code == crate::domain::IssueCode::InvalidDate));
     }
 
     #[test]

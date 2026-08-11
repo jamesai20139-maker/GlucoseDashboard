@@ -24,12 +24,36 @@ pub const BUILTIN_EVENT_LABELS: [&str; 6] =
 /// 回傳 `Vec` 而非 `const`，因 `EventThreshold.label` 為 `String` 無法在 const 上下文建構。
 pub fn builtin_event_thresholds() -> Vec<EventThreshold> {
     vec![
-        EventThreshold { label: "空腹血糖".into(), low: 70, high: 100 },
-        EventThreshold { label: "午餐前".into(), low: 70, high: 101 },
-        EventThreshold { label: "午餐後".into(), low: 70, high: 140 },
-        EventThreshold { label: "晚餐前".into(), low: 70, high: 101 },
-        EventThreshold { label: "晚餐後".into(), low: 70, high: 140 },
-        EventThreshold { label: "睡前".into(), low: 70, high: 140 },
+        EventThreshold {
+            label: "空腹血糖".into(),
+            low: 70,
+            high: 100,
+        },
+        EventThreshold {
+            label: "午餐前".into(),
+            low: 70,
+            high: 101,
+        },
+        EventThreshold {
+            label: "午餐後".into(),
+            low: 70,
+            high: 140,
+        },
+        EventThreshold {
+            label: "晚餐前".into(),
+            low: 70,
+            high: 101,
+        },
+        EventThreshold {
+            label: "晚餐後".into(),
+            low: 70,
+            high: 140,
+        },
+        EventThreshold {
+            label: "睡前".into(),
+            low: 70,
+            high: 140,
+        },
     ]
 }
 
@@ -69,7 +93,11 @@ impl LocalConfiguration {
     pub fn normalize(&mut self) {
         // 若 event_thresholds 缺少任一內建事件，補上預設值。
         for builtin in builtin_event_thresholds() {
-            if !self.event_thresholds.iter().any(|t| t.label == builtin.label) {
+            if !self
+                .event_thresholds
+                .iter()
+                .any(|t| t.label == builtin.label)
+            {
                 self.event_thresholds.push(builtin);
             }
         }
@@ -114,7 +142,11 @@ mod tests {
     use super::*;
 
     fn threshold(label: &str, low: i32, high: i32) -> EventThreshold {
-        EventThreshold { label: label.into(), low, high }
+        EventThreshold {
+            label: label.into(),
+            low,
+            high,
+        }
     }
 
     #[test]
@@ -207,7 +239,10 @@ mod tests {
         assert_eq!(fasting, 1);
         // 保留第一次出現的值。
         assert_eq!(
-            config.event_thresholds.iter().find(|t| t.label == "空腹血糖"),
+            config
+                .event_thresholds
+                .iter()
+                .find(|t| t.label == "空腹血糖"),
             Some(&threshold("空腹血糖", 70, 110))
         );
     }
@@ -248,8 +283,11 @@ mod tests {
             ],
         };
         config.normalize();
-        let labels: Vec<&str> =
-            config.event_thresholds.iter().map(|t| t.label.as_str()).collect();
+        let labels: Vec<&str> = config
+            .event_thresholds
+            .iter()
+            .map(|t| t.label.as_str())
+            .collect();
         // 內建依 BUILTIN_EVENT_LABELS 順序在前，自訂在後。
         assert_eq!(labels[0], "空腹血糖");
         assert_eq!(labels[1], "午餐前");
@@ -321,9 +359,6 @@ mod tests {
     fn event_threshold_serializes_with_expected_fields() {
         let t = threshold("空腹血糖", 70, 99);
         let json = serde_json::to_string(&t).unwrap();
-        assert_eq!(
-            json,
-            r#"{"label":"空腹血糖","low":70,"high":99}"#
-        );
+        assert_eq!(json, r#"{"label":"空腹血糖","low":70,"high":99}"#);
     }
 }

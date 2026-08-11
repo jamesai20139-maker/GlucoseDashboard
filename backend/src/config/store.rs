@@ -86,7 +86,8 @@ mod tests {
     /// .glucose-dashboard.json，回傳該目錄。原子計數器確保並行測試不共用目錄。
     fn temp_cwd_with_config() -> PathBuf {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("glucose-config-test-{}-{}", std::process::id(), n));
+        let dir =
+            std::env::temp_dir().join(format!("glucose-config-test-{}-{}", std::process::id(), n));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join(".glucose-dashboard.json"), b"{}").unwrap();
         dir
