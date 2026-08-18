@@ -3,12 +3,15 @@ import { DashboardLayout } from '../components/layout/DashboardLayout';
 import { GlucoseRecordTable } from '../components/records/GlucoseRecordTable';
 import { SummaryCards } from '../components/summary/SummaryCards';
 import { GlucoseTrendChart } from '../components/trend/GlucoseTrendChart';
-import { configureDashboard, exportUrl, getConfigStatus, syncDashboard, testConnection, addCustomEvent, deleteCustomEvent, updateEventThresholds, type PeriodSelection } from '../services/local_service';
+import { configureDashboard, exportUrl, getConfigStatus, syncDashboard, testConnection, type PeriodSelection } from '../services/local_service';
 import { useDashboard } from '../state/dashboard_store';
 import { useTheme } from '../state/use_theme';
 import type { ConfigStatus, ConnectionTestReport, CustomEventConfig, EventThreshold } from '../types';
 
 const BUILTIN_FILTERS: [string, string][] = [['', '全部'], ['空腹血糖', '空腹血糖'], ['午餐前', '午餐前'], ['午餐後', '午餐後'], ['晚餐前', '晚餐前'], ['晚餐後', '晚餐後'], ['睡前', '睡前']];
+
+const DEFAULT_EVENT_KEYWORDS_SHEET_NAME = '事件關鍵字設定';
+const DEFAULT_GLUCOSE_STANDARDS_SHEET_NAME = '血糖標準值設定';
 
 function configLabel(config: ConfigStatus | null): string {
   if (!config) return '尚未讀取設定';
@@ -36,22 +39,20 @@ export default function App() {
   const [sheetId, setSheetId] = useState('');
   const [sheetName, setSheetName] = useState('Sheet1');
   const [fixturePath, setFixturePath] = useState('');
+  // 兩個設定工作表名稱（預設為內建常數）。
+  const [eventKeywordsSheetName, setEventKeywordsSheetName] = useState(DEFAULT_EVENT_KEYWORDS_SHEET_NAME);
+  const [glucoseStandardsSheetName, setGlucoseStandardsSheetName] = useState(DEFAULT_GLUCOSE_STANDARDS_SHEET_NAME);
   const [dirty, setDirty] = useState(false);
   const dirtyRef = useRef(false);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [connectionResult, setConnectionResult] = useState<ConnectionTestReport | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  // 自訂事件關鍵字與血糖標準值：自 schema 4 起改由 Google Sheet 即時衍生，
+  // 不再於本機編輯。此處僅快取最近一次 DashboardResponse/SyncResponse 的值，
+  // 供側邊篩選、圖/表上色與唯讀顯示使用；首次同步前為空。
   const [customEvents, setCustomEvents] = useState<CustomEventConfig[]>([]);
-  const [newEventLabel, setNewEventLabel] = useState('');
-  const [eventError, setEventError] = useState<string | null>(null);
-  const [savingEvent, setSavingEvent] = useState(false);
-  // 「血糖標準值」分頁：本地編輯表單與來源 state。eventThresholds 為已儲存的值，
-  // 用於趨勢圖/表格上色；thresholdsDraft 為分頁內可編輯的暫存值，儲存後才套用。
   const [eventThresholds, setEventThresholds] = useState<EventThreshold[]>([]);
-  const [thresholdsDraft, setThresholdsDraft] = useState<EventThreshold[]>([]);
-  const [thresholdsError, setThresholdsError] = useState<string | null>(null);
-  const [savingThresholds, setSavingThresholds] = useState(false);
 
   // 由目前時間區間選擇組裝 PeriodSelection，供 useDashboard 與匯出使用。
   const selection: PeriodSelection = useMemo(() => {
@@ -65,12 +66,32 @@ export default function App() {
   const { data, loading, error, reload } = useDashboard(selection, event || undefined, search || undefined);
   const [refreshing, setRefreshing] = useState(false);
 
-  // 「立即更新」：強制重新抓取 Sheet（POST /api/sync），更新同步時間後再重載儀表板。
+  // 從 DashboardResponse 同步 Sheet 衍生的設定（事件關鍵字、血糖標準值）。
+  // 每次儀表板載入都會更新；首次同步前 data 可能為 null（此時沿用既有快取）。
+  useEffect(() => {
+    if (data) {
+      setCustomEvents(data.custom_events || []);
+      setEventThresholds(data.event_thresholds || []);
+      // Sheet 編輯後目前選中的自訂事件可能消失 → 回到「全部」。
+      if (event && !BUILTIN_FILTERS.some(([key]) => key === event)
+          && !(data.custom_events || []).some((c) => c.label === event)) {
+        setEvent('');
+      }
+    }
+  }, [data]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 「立即更新」：強制重新抓取 Sheet（POST /api/sync），套用回應的設定後再重載儀表板。
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await syncDashboard();
+      const synced = await syncDashboard();
+      // 同步回應已含最新衍生設定，立即套用（不必等 dashboard 重載）。
+      setCustomEvents(synced.custom_events || []);
+      setEventThresholds(synced.event_thresholds || []);
       await reload();
+    } catch (cause) {
+      // 同步失敗訊息會經由 useDashboard 的下次 reload 顯示；此處不額外處理。
+      void cause;
     } finally {
       setRefreshing(false);
     }
@@ -82,14 +103,14 @@ export default function App() {
     try {
       const next = await getConfigStatus();
       setConfig(next);
-      setCustomEvents(next.custom_events || []);
-      const thresholds = next.event_thresholds || [];
-      setEventThresholds(thresholds);
-      setThresholdsDraft(thresholds.map((t) => ({ ...t })));
+      // custom_events/event_thresholds 為快取暫存值（首次同步前可能為空）；
+      // 不在此覆蓋，改由 DashboardResponse 同步以取得最新值。
       if (!dirtyRef.current) {
         setSheetId(next.sheet_id || '');
         setSheetName(next.sheet_name || 'Sheet1');
         setFixturePath(next.fixture_path || '');
+        setEventKeywordsSheetName(next.event_keywords_sheet_name || DEFAULT_EVENT_KEYWORDS_SHEET_NAME);
+        setGlucoseStandardsSheetName(next.glucose_standards_sheet_name || DEFAULT_GLUCOSE_STANDARDS_SHEET_NAME);
       }
     } catch (cause) {
       setConfigError(cause instanceof Error ? cause.message : '讀取設定失敗');
@@ -102,14 +123,16 @@ export default function App() {
     void loadConfig();
   }, [loadConfig]);
 
-  async function handleSubmit(event: { preventDefault: () => void }) {
-    event.preventDefault();
+  async function handleSubmit(submitEvent: { preventDefault: () => void }) {
+    submitEvent.preventDefault();
     setSaving(true);
     try {
       const next = await configureDashboard({
         sheet_id: sheetId.trim(),
         sheet_name: sheetName.trim() || 'Sheet1',
         fixture_path: fixturePath.trim() || undefined,
+        event_keywords_sheet_name: eventKeywordsSheetName.trim() || undefined,
+        glucose_standards_sheet_name: glucoseStandardsSheetName.trim() || undefined,
       });
       setConfig(next);
       setDirty(false);
@@ -136,70 +159,6 @@ export default function App() {
     }
   }
 
-  // 新增自訂事件關鍵字。後端以預設顯示標準 70–140 補入；成功後重載設定與儀表板，
-  // 並同步 event_thresholds 讓「血糖標準值」分頁即時出現新事件。
-  async function handleAddCustomEvent(submitEvent: { preventDefault: () => void }) {
-    submitEvent.preventDefault();
-    setEventError(null);
-    setSavingEvent(true);
-    try {
-      const next = await addCustomEvent({ label: newEventLabel.trim() });
-      setConfig(next);
-      setCustomEvents(next.custom_events);
-      const thresholds = next.event_thresholds || [];
-      setEventThresholds(thresholds);
-      setThresholdsDraft(thresholds.map((t) => ({ ...t })));
-      setNewEventLabel('');
-      await reload();
-    } catch (cause) {
-      setEventError(cause instanceof Error ? cause.message : '新增事件關鍵字失敗');
-    } finally {
-      setSavingEvent(false);
-    }
-  }
-
-  async function handleDeleteCustomEvent(label: string) {
-    setEventError(null);
-    try {
-      const next = await deleteCustomEvent(label);
-      setConfig(next);
-      setCustomEvents(next.custom_events);
-      const thresholds = next.event_thresholds || [];
-      setEventThresholds(thresholds);
-      setThresholdsDraft(thresholds.map((t) => ({ ...t })));
-      // 若目前選中的事件被刪除，回到「全部」。
-      if (event === label) setEvent('');
-      await reload();
-    } catch (cause) {
-      setEventError(cause instanceof Error ? cause.message : '刪除事件關鍵字失敗');
-    }
-  }
-
-  // 儲存「血糖標準值」分頁編輯。後端要求完整集合（6 內建 + 全部現存自訂事件），
-  // thresholdsDraft 已含兩者；直接送出。成功後套用至上色來源並重載儀表板。
-  async function handleSaveThresholds(submitEvent: { preventDefault: () => void }) {
-    submitEvent.preventDefault();
-    setThresholdsError(null);
-    setSavingThresholds(true);
-    try {
-      const next = await updateEventThresholds({ event_thresholds: thresholdsDraft });
-      setConfig(next);
-      const thresholds = next.event_thresholds || [];
-      setEventThresholds(thresholds);
-      setThresholdsDraft(thresholds.map((t) => ({ ...t })));
-      await reload();
-    } catch (cause) {
-      setThresholdsError(cause instanceof Error ? cause.message : '儲存血糖標準值失敗');
-    } finally {
-      setSavingThresholds(false);
-    }
-  }
-
-  // 更新 thresholdsDraft 中指定事件的下限/上限欄位。
-  function updateThresholdField(label: string, field: 'low' | 'high', value: number) {
-    setThresholdsDraft(thresholdsDraft.map((t) => (t.label === label ? { ...t, [field]: value } : t)));
-  }
-
   // 側邊篩選項目：內建 6 個 + 使用者自訂關鍵字。
   const filters = useMemo<[string, string][]>(
     () => [...BUILTIN_FILTERS, ...customEvents.map((c) => [c.label, c.label] as [string, string])],
@@ -207,17 +166,18 @@ export default function App() {
   );
 
   const setupSteps = useMemo(() => [
-    '在 Google Sheet 右上角複製網址，找到 `/d/` 與 `/edit` 之間的字串，貼到「Sheet ID」。',
-    '確認工作表名稱與實際分頁一致；如果只有一張表，可先保留 `Sheet1`。',
-    '檢查標題列是否完全符合專案定義，包含日期時間、事件、血糖、備註1、備註2。',
-    '若要讀取真實 Google Sheet，請確認該 Sheet 對目前環境可讀取；如果要先測試，也可以填入本機 CSV 路徑。',
+    '可直接貼整個 Google Sheet 網址，系統會自動擷取 Sheet ID。',
+    '確認「資料工作表名稱」與實際分頁一致；如果只有一張表，可先保留 `Sheet1`。',
+    '確認工作表中有兩個設定分頁：「事件關鍵字設定」與「血糖標準值設定」，名稱可在下方欄位調整。',
+    '「事件關鍵字設定」分頁須為單欄，標頭為「事件關鍵字」；「血糖標準值設定」分頁須為三欄，標頭為「事件,血糖下限,血糖上限」，並含全部六個內建事件。',
     '按下「儲存設定」後，使用「立即更新」重新讀取資料，確認卡片、趨勢圖和表格都有內容。',
   ], []);
 
   const notes = useMemo(() => [
-    'Sheet ID 只能是來源網址中的識別碼，不要貼整個網址。',
-    '目前同步會優先讀取本機 CSV；沒有本機檔案時，會嘗試用 Google Sheet 的 CSV 匯出端點讀取。',
-    '如果沒有讀取權限、標題列不正確，或來源檔案不存在，同步會失敗並顯示錯誤。',
+    '一旦設定 Google Sheet 網址，系統一律直讀 Sheet（非本機 CSV 優先）。',
+    '事件關鍵字與血糖標準值改由 Google Sheet 的兩個設定分頁即時衍生，不再於本機編輯；每次載入儀表板或同步都會重新讀取。',
+    '只設本機 CSV 路徑（未連結 Sheet）時，事件關鍵字為無、血糖標準值退回六個內建預設。',
+    '若設定分頁缺失、空白或格式錯誤，儀表板會顯示阻斷錯誤訊息（指出哪個分頁/欄位/值有問題）。',
     '真實 Google Sheet 建議只給讀取權限，避免把可寫入的分享權限交給不必要的人。',
   ], []);
 
@@ -234,22 +194,34 @@ export default function App() {
       </div>
       {configError ? <p className="inline-error">{configError}</p> : null}
       <form className="sheet-form" onSubmit={handleSubmit}>
-        <label>Google Sheet 網址或 ID<input value={sheetId} onChange={(event: { target: { value: string } }) => { setSheetId(event.target.value); setDirty(true); dirtyRef.current = true; }} placeholder="https://docs.google.com/spreadsheets/d/.../edit" required /></label>
-        <label>工作表名稱<input value={sheetName} onChange={(event: { target: { value: string } }) => { setSheetName(event.target.value); setDirty(true); dirtyRef.current = true; }} placeholder="Sheet1" /></label>
-        <label>本機 CSV 路徑<input value={fixturePath} onChange={(event: { target: { value: string } }) => { setFixturePath(event.target.value); setDirty(true); dirtyRef.current = true; }} placeholder="backend/tests/fixtures/valid-sheet.csv" /></label>
+        <label>Google Sheet 網址或 ID<input value={sheetId} onChange={(e: { target: { value: string } }) => { setSheetId(e.target.value); setDirty(true); dirtyRef.current = true; }} placeholder="https://docs.google.com/spreadsheets/d/.../edit" required /></label>
+        <label>資料工作表名稱<input value={sheetName} onChange={(e: { target: { value: string } }) => { setSheetName(e.target.value); setDirty(true); dirtyRef.current = true; }} placeholder="Sheet1" /></label>
+        <label>事件關鍵字工作表名稱<input value={eventKeywordsSheetName} onChange={(e: { target: { value: string } }) => { setEventKeywordsSheetName(e.target.value); setDirty(true); dirtyRef.current = true; }} placeholder={DEFAULT_EVENT_KEYWORDS_SHEET_NAME} /></label>
+        <label>血糖標準值工作表名稱<input value={glucoseStandardsSheetName} onChange={(e: { target: { value: string } }) => { setGlucoseStandardsSheetName(e.target.value); setDirty(true); dirtyRef.current = true; }} placeholder={DEFAULT_GLUCOSE_STANDARDS_SHEET_NAME} /></label>
+        <label>本機 CSV 路徑<input value={fixturePath} onChange={(e: { target: { value: string } }) => { setFixturePath(e.target.value); setDirty(true); dirtyRef.current = true; }} placeholder="backend/tests/fixtures/valid-sheet.csv" /></label>
         <div className="form-actions">
           <button type="submit" disabled={saving || configLoading}>{saving ? '儲存中…' : '儲存設定'}</button>
           <button type="button" onClick={() => { setDirty(false); dirtyRef.current = false; void loadConfig(); }}>重新載入</button>
         </div>
         <button className="connection-check" type="button" onClick={() => void handleTestConnection()} disabled={testing || configLoading}>{testing ? '測試中…' : '測試連線'}</button>
-        <p className="form-hint">可直接貼整個 Google Sheet 網址，系統會自動擷取 Sheet ID。工作表名稱若未指定，預設為 `Sheet1`。</p>
+        <p className="form-hint">可直接貼整個 Google Sheet 網址，系統會自動擷取 Sheet ID。資料工作表名稱預設為 `Sheet1`；兩個設定工作表名稱預設為「事件關鍵字設定」與「血糖標準值設定」。</p>
       </form>
       {connectionError ? <div className="connection-result error"><strong>測試失敗</strong><p>{connectionError}</p></div> : null}
-      {connectionResult ? <div className={`connection-result ${connectionResult.ok ? 'ok' : 'error'}`}><strong>{connectionResult.ok ? '測試成功' : '測試失敗'}</strong><p>{connectionResult.message}</p><p>HTTP：{connectionResult.http_status ?? '未知'}　記錄：{connectionResult.record_count ?? '未知'}　問題：{connectionResult.issue_count ?? '未知'}</p><p>Sheet GID：{connectionResult.sheet_gid ?? '未指定'}</p><p>網址：{connectionResult.url ?? '未知'}</p>{connectionResult.detail ? <p className="connection-detail">{connectionResult.detail}</p> : null}</div> : null}
+      {connectionResult ? <div className={`connection-result ${connectionResult.ok ? 'ok' : 'error'}`}>
+        <strong>{connectionResult.ok ? '測試成功' : '測試失敗'}</strong>
+        <p>資料工作表：{connectionResult.data_sheet.ok ? '✓' : '✗'} {connectionResult.data_sheet.message}</p>
+        <p>事件關鍵字設定：{connectionResult.event_keywords_sheet.ok ? '✓' : '✗'} {connectionResult.event_keywords_sheet.message}</p>
+        <p>血糖標準值設定：{connectionResult.glucose_standards_sheet.ok ? '✓' : '✗'} {connectionResult.glucose_standards_sheet.message}</p>
+        {connectionResult.data_sheet.detail ? <p className="connection-detail">資料表：{connectionResult.data_sheet.detail}</p> : null}
+        {connectionResult.event_keywords_sheet.detail ? <p className="connection-detail">關鍵字：{connectionResult.event_keywords_sheet.detail}</p> : null}
+        {connectionResult.glucose_standards_sheet.detail ? <p className="connection-detail">標準值：{connectionResult.glucose_standards_sheet.detail}</p> : null}
+      </div> : null}
       <div className="config-meta">
         <p><span>Sheet ID</span><strong>{config?.sheet_id || '尚未設定'}</strong></p>
         <p><span>Sheet GID</span><strong>{config?.sheet_gid || '未指定'}</strong></p>
-        <p><span>工作表</span><strong>{config?.sheet_name || 'Sheet1'}</strong></p>
+        <p><span>資料工作表</span><strong>{config?.sheet_name || 'Sheet1'}</strong></p>
+        <p><span>事件關鍵字工作表</span><strong>{config?.event_keywords_sheet_name || DEFAULT_EVENT_KEYWORDS_SHEET_NAME}</strong></p>
+        <p><span>血糖標準值工作表</span><strong>{config?.glucose_standards_sheet_name || DEFAULT_GLUCOSE_STANDARDS_SHEET_NAME}</strong></p>
         <p><span>來源</span><strong>{config?.fixture_path || 'Google Sheet 直讀'}</strong></p>
         <p><span>最後同步</span><strong>{config?.last_successful_sync_at ? config.last_successful_sync_at.slice(0, 16).replace('T', ' ') : '尚未同步'}</strong></p>
       </div>
@@ -268,47 +240,34 @@ export default function App() {
     </section>
   </>;
 
+  // 事件關鍵字設定：唯讀顯示（由 Google Sheet「事件關鍵字設定」工作表衍生）。
   const eventsPanel = <>
     <section className="side-section custom-events-card">
       <h3>🏷　事件關鍵字設定</h3>
-      <p className="form-hint">新增自訂事件關鍵字後，事件欄填入相同字串的列會出現在側邊「篩選項目」。每個事件的標準範圍請至「血糖標準值」分頁設定。</p>
-      {eventError ? <p className="inline-error">{eventError}</p> : null}
+      <p className="form-hint">事件關鍵字由 Google Sheet「事件關鍵字設定」工作表維護，每次載入儀表板或同步都會重新讀取。請直接在工作表中新增或刪除關鍵字。</p>
       <ul className="custom-event-list">
-        {customEvents.map((c) => <li key={c.label}><span className="custom-event-label">{c.label}</span><button type="button" className="custom-event-remove" onClick={() => void handleDeleteCustomEvent(c.label)} aria-label={`刪除 ${c.label}`}>✕</button></li>)}
-        {customEvents.length === 0 ? <li className="custom-event-empty">尚未新增自訂事件關鍵字</li> : null}
+        {customEvents.map((c) => <li key={c.label}><span className="custom-event-label">{c.label}</span><span className="custom-event-threshold">{c.low_threshold}～{c.high_threshold}</span></li>)}
+        {customEvents.length === 0 ? <li className="custom-event-empty">尚未連結 Sheet 或工作表無自訂關鍵字</li> : null}
       </ul>
-      <form className="sheet-form" onSubmit={handleAddCustomEvent}>
-        <label>關鍵字<input value={newEventLabel} onChange={(e: { target: { value: string } }) => setNewEventLabel(e.target.value)} placeholder="例如：運動後" required /></label>
-        <div className="form-actions">
-          <button type="submit" disabled={savingEvent}>{savingEvent ? '新增中…' : '新增關鍵字'}</button>
-        </div>
-        <p className="form-hint">新增後可在「血糖標準值」分頁調整該事件的正常範圍。</p>
-      </form>
     </section>
   </>;
 
+  // 血糖標準值：唯讀顯示（由 Google Sheet「血糖標準值設定」工作表衍生）。
   const thresholdsPanel = <>
     <section className="side-section thresholds-card">
       <h3>⚖　血糖標準值</h3>
-      <p className="form-hint">設定每個事件的正常血糖範圍。趨勢圖與血糖紀錄會依此上色：超過上限為紅色、範圍內為綠色、低於下限為黃色。此設定不影響摘要統計。</p>
-      {thresholdsError ? <p className="inline-error">{thresholdsError}</p> : null}
-      <form className="sheet-form" onSubmit={handleSaveThresholds}>
-        <ul className="threshold-list">
-          {thresholdsDraft.map((t) => <li key={t.label}>
-            <span className="threshold-label">{t.label}</span>
-            <div className="threshold-row">
-              <label>下限<input type="number" min={20} max={600} value={t.low} onChange={(e: { target: { value: string } }) => updateThresholdField(t.label, 'low', Number(e.target.value))} /></label>
-              <span className="range-sep">～</span>
-              <label>上限<input type="number" min={20} max={600} value={t.high} onChange={(e: { target: { value: string } }) => updateThresholdField(t.label, 'high', Number(e.target.value))} /></label>
-            </div>
-          </li>)}
-          {thresholdsDraft.length === 0 ? <li className="custom-event-empty">載入標準值中…</li> : null}
-        </ul>
-        <div className="form-actions">
-          <button type="submit" disabled={savingThresholds}>{savingThresholds ? '儲存中…' : '儲存標準值'}</button>
-        </div>
-        <p className="form-hint">閾值須介於 20–600，且下限須小於上限。內建事件不可刪除，自訂事件請至「事件關鍵字」分頁管理。</p>
-      </form>
+      <p className="form-hint">血糖標準值由 Google Sheet「血糖標準值設定」工作表維護，每次載入儀表板或同步都會重新讀取。趨勢圖與表格依此上色：超過上限為紅色、範圍內為綠色、低於下限為黃色。此設定不影響摘要統計。</p>
+      <ul className="threshold-list">
+        {eventThresholds.map((t) => <li key={t.label}>
+          <span className="threshold-label">{t.label}</span>
+          <div className="threshold-row">
+            <span className="threshold-value low">下限 {t.low}</span>
+            <span className="range-sep">～</span>
+            <span className="threshold-value high">上限 {t.high}</span>
+          </div>
+        </li>)}
+        {eventThresholds.length === 0 ? <li className="custom-event-empty">尚未連結 Sheet，載入內建預設中…</li> : null}
+      </ul>
     </section>
   </>;
 
