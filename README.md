@@ -17,6 +17,13 @@ irm https://raw.githubusercontent.com/jamesai20139-maker/GlucoseDashboard/main/i
 （後端會自動開啟瀏覽器）。之後在新開的 PowerShell 輸入 `glucose-dashboard`
 即可再次啟動。詳見 [installer/README.md](installer/README.md)。
 
+## 使用者資料填寫參考
+
+儀表板需要一份符合固定欄位格式的 Google Sheet 才能讀取。若你是第一次建立資料表，請參考：
+
+- [docs/填寫說明.md](docs/填寫說明.md) — 詳細說明欄位格式、日期與事件規則、無效資料處理、設定注意事項。
+- [docs/sample-sheet.csv](docs/sample-sheet.csv) — 可直接複製貼入 Google Sheet 的範例檔，涵蓋六個內建事件與備註寫法（含 UTF-8 BOM，可用 Excel 預覽）。
+
 ## 開發者
 
 開發與測試請見 [CLAUDE.md](CLAUDE.md) 與 [Agents.md](Agents.md)。
