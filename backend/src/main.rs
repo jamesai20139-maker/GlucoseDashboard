@@ -36,7 +36,7 @@ async fn main() {
         Some("config") => {
             let sheet_id = args.get(2).cloned().unwrap_or_default();
             let fixture = args.get(3).cloned();
-            match service::configure(&config, sheet_id, "Sheet1".into(), fixture) {
+            match service::configure(&config, sheet_id, "Sheet1".into(), fixture, None, None) {
                 Ok(_) => println!("設定完成，請執行 glucose-dashboard 啟動 Dashboard。"),
                 Err(error) => {
                     eprintln!("設定失敗：{error}");

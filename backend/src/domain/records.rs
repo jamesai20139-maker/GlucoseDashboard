@@ -22,7 +22,7 @@ pub struct DashboardTableRow {
 
 /// 自訂事件關鍵字：由使用者在設定介面新增，攜帶自訂高低閾值。同時作為設定檔
 /// 持久化形狀與 `Event::Custom` 的執行期承載，避免額外的 DTO 轉換。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CustomEvent {
     pub label: String,
     /// 低於此值視為低血糖。
@@ -142,10 +142,12 @@ impl GlucoseRecord {
     pub fn classify(&self) -> Classification {
         let value = self.glucose_mg_dl;
         match &self.event {
+            // 自訂事件：`high` 採「第一個偏高值」語義（value >= high 判高），
+            // 與前端 `classify.ts` 的 `value >= high` 及內建事件閾值語義一致。
             Event::Custom(c) => {
                 if value < c.low_threshold {
                     Classification::Low
-                } else if value > c.high_threshold {
+                } else if value >= c.high_threshold {
                     Classification::High
                 } else {
                     Classification::InRange
@@ -484,6 +486,7 @@ mod tests {
 
     #[test]
     fn custom_event_classifies_by_user_thresholds() {
+        // `high` 採「第一個偏高值」語義（value >= high 判高），與前端及內建一致。
         let event = Event::Custom(custom("運動後", 70, 139));
         assert_eq!(record(69, event.clone()).classify(), Classification::Low);
         assert_eq!(
@@ -491,9 +494,11 @@ mod tests {
             Classification::InRange
         );
         assert_eq!(
-            record(139, event.clone()).classify(),
+            record(138, event.clone()).classify(),
             Classification::InRange
         );
+        // 139 等於 high → 偏高。
+        assert_eq!(record(139, event.clone()).classify(), Classification::High);
         assert_eq!(record(140, event).classify(), Classification::High);
     }
 

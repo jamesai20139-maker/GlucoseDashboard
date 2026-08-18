@@ -13,8 +13,12 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use super::{config_routes, dashboard_routes, sync_routes};
 use crate::{
-    config::{model::LocalConfiguration, store::ConfigStore},
-    domain::{DashboardTableRow, DataQualityIssue, GlucoseRecord},
+    config::{
+        model::{EventThreshold, LocalConfiguration},
+        store::ConfigStore,
+    },
+    domain::{CustomEvent, DashboardTableRow, DataQualityIssue, GlucoseRecord},
+    ingestion::sync_service::{GoogleSheetFetcher, ReqwestGoogleSheetFetcher},
 };
 
 /// 編譯期嵌入的前端資產（`frontend/dist`）。產出單一 exe 時不再依賴磁碟上的
@@ -24,13 +28,16 @@ use crate::{
 #[folder = "../frontend/dist/"]
 struct FrontendAsset;
 
-/// 進程記憶體暫存：存放已抓取並解析的 Sheet 紀錄。不寫磁碟、重啟即清空，
-/// 符合憲法「ephemeral analysis」要求。以設定簽章為 key，設定變更即失效。
+/// 進程記憶體暫存：存放已抓取並解析的 Sheet 紀錄，以及當下衍生的設定
+/// （事件關鍵字、血糖標準值）。不寫磁碟、重啟即清空，符合憲法「ephemeral
+/// analysis」要求。以設定簽章為 key，設定變更即失效。
 #[derive(Debug, Clone)]
 pub struct RecordsCache {
     pub records: Vec<GlucoseRecord>,
     pub table_rows: Vec<DashboardTableRow>,
     pub issues: Vec<DataQualityIssue>,
+    pub custom_events: Vec<CustomEvent>,
+    pub event_thresholds: Vec<EventThreshold>,
     pub fetched_at: DateTime<Utc>,
     pub source_signature: String,
 }
@@ -39,9 +46,12 @@ pub struct RecordsCache {
 pub struct ApiState {
     pub config: ConfigStore,
     pub records_cache: Arc<RwLock<Option<RecordsCache>>>,
+    pub sheet_fetcher: Arc<dyn GoogleSheetFetcher>,
 }
 
-/// 由目前設定算出唯一簽章：sheet_id|gid|name 或 fixture_path。設定一變簽章即不同。
+/// 由目前設定算出唯一簽章：sheet_id|gid|name|兩工作表名 或 fixture_path。
+/// 設定一變簽章即不同。工作表名變更可偵測；工作表內容變更靠快取比對
+/// `custom_events`/`event_thresholds`（見 dashboard_routes）。
 pub fn source_signature(config: &LocalConfiguration) -> String {
     if config
         .sheet_id
@@ -50,10 +60,15 @@ pub fn source_signature(config: &LocalConfiguration) -> String {
         .unwrap_or(false)
     {
         format!(
-            "sheet|{}|{}|{}",
+            "sheet|{}|{}|{}|{}|{}",
             config.sheet_id.clone().unwrap_or_default(),
             config.sheet_gid.clone().unwrap_or_default(),
-            config.sheet_name.clone().unwrap_or_default()
+            config.sheet_name.clone().unwrap_or_default(),
+            config.event_keywords_sheet_name.clone().unwrap_or_default(),
+            config
+                .glucose_standards_sheet_name
+                .clone()
+                .unwrap_or_default(),
         )
     } else if let Some(path) = &config.fixture_path {
         format!("fixture|{}", path)
@@ -66,6 +81,7 @@ pub fn build_router(config: ConfigStore) -> Router {
     let state = ApiState {
         config,
         records_cache: Arc::new(RwLock::new(None)),
+        sheet_fetcher: Arc::new(ReqwestGoogleSheetFetcher),
     };
     // 開發友好：若當前工作目錄下有 `frontend/dist`（如 `make run` 先建好），
     // 走磁碟檔案，方便前端改完即重 build 生效；否則用嵌入資產，讓安裝版
@@ -79,15 +95,6 @@ pub fn build_router(config: ConfigStore) -> Router {
         .route("/api/health", get(|| async { "{\"status\":\"ok\"}" }))
         .route("/api/config/status", get(config_routes::status))
         .route("/api/configure", post(config_routes::configure))
-        .route("/api/custom-events", post(config_routes::add_custom_event))
-        .route(
-            "/api/custom-events/{label}",
-            axum::routing::delete(config_routes::delete_custom_event),
-        )
-        .route(
-            "/api/event-thresholds",
-            post(config_routes::update_event_thresholds),
-        )
         .route(
             "/api/config/test-connection",
             get(config_routes::test_connection),
@@ -200,22 +207,22 @@ mod tests {
 
     fn config(sheet_id: Option<&str>, fixture: Option<&str>) -> LocalConfiguration {
         LocalConfiguration {
-            schema_version: 2,
+            schema_version: 4,
             sheet_id: sheet_id.map(str::to_string),
             sheet_gid: None,
             sheet_name: Some("Sheet1".into()),
             fixture_path: fixture.map(str::to_string),
             credential_reference: None,
             last_successful_sync_at: None,
-            custom_events: Vec::new(),
-            event_thresholds: Vec::new(),
+            event_keywords_sheet_name: Some("事件關鍵字設定".into()),
+            glucose_standards_sheet_name: Some("血糖標準值設定".into()),
         }
     }
 
     #[test]
     fn signature_prefers_sheet_id() {
         let sig = source_signature(&config(Some("ABC123"), Some("/tmp/x.csv")));
-        assert_eq!(sig, "sheet|ABC123||Sheet1");
+        assert_eq!(sig, "sheet|ABC123||Sheet1|事件關鍵字設定|血糖標準值設定");
     }
 
     #[test]

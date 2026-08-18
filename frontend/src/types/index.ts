@@ -53,6 +53,20 @@ export interface DashboardResponse {
   issues: { message_zh_tw: string; code: string }[];
   status: string;
   last_successful_sync_at: string | null;
+  /// 即時衍生的自訂事件關鍵字（由「事件關鍵字設定」工作表）。
+  custom_events: CustomEventConfig[];
+  /// 即時衍生的血糖標準值（由「血糖標準值設定」工作表）。
+  event_thresholds: EventThreshold[];
+}
+
+/// `/api/sync` 回應（與 DashboardResponse 不同：無 selection/table_rows）。
+export interface SyncResponse {
+  status: string;
+  records: GlucoseRecord[];
+  issues: { message_zh_tw: string; code: string }[];
+  last_successful_sync_at: string | null;
+  custom_events: CustomEventConfig[];
+  event_thresholds: EventThreshold[];
 }
 
 export interface ConfigStatus {
@@ -64,8 +78,25 @@ export interface ConfigStatus {
   sheet_name: string | null;
   fixture_path: string | null;
   last_successful_sync_at: string | null;
+  /// 「事件關鍵字設定」工作表名稱。
+  event_keywords_sheet_name: string | null;
+  /// 「血糖標準值設定」工作表名稱。
+  glucose_standards_sheet_name: string | null;
+  /// 即時衍生值（取自快取，首次同步前為空）；權威來源為 DashboardResponse/SyncResponse。
   custom_events: CustomEventConfig[];
   event_thresholds: EventThreshold[];
+}
+
+/// 單一工作表的連線測試報告。
+export interface WorksheetConnectionReport {
+  ok: boolean;
+  sheet_name: string | null;
+  url: string | null;
+  http_status: number | null;
+  row_count: number | null;
+  header_valid: boolean;
+  message: string;
+  detail: string | null;
 }
 
 export interface ConnectionTestReport {
@@ -73,11 +104,7 @@ export interface ConnectionTestReport {
   ok: boolean;
   sheet_id: string | null;
   sheet_gid: string | null;
-  sheet_name: string | null;
-  url: string | null;
-  http_status: number | null;
-  record_count: number | null;
-  issue_count: number | null;
-  message: string;
-  detail: string | null;
+  data_sheet: WorksheetConnectionReport;
+  event_keywords_sheet: WorksheetConnectionReport;
+  glucose_standards_sheet: WorksheetConnectionReport;
 }

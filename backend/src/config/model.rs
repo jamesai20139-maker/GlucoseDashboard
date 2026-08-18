@@ -1,11 +1,14 @@
 use serde::{Deserialize, Serialize};
 
-/// 使用者自訂事件關鍵字設定。重匯出 domain 的 `CustomEvent` 作為設定檔持久化形狀，
+/// 使用者自訂事件關鍵字。重匯出 domain 的 `CustomEvent` 作為執行期承載形狀，
 /// 避免重複定義；兩者欄位一致（label / low_threshold / high_threshold）。
+/// 注意：自 schema 4 起 `custom_events` 不再持久化於設定檔，改由 Google Sheet
+/// 的「事件關鍵字設定」工作表即時衍生（見 `ingestion::settings_loader`）。
 pub use crate::domain::CustomEvent as CustomEventConfig;
 
 /// 單一事件的「前端顯示標準」範圍。`event_thresholds` 是趨勢圖與表格上色的
 /// 唯一來源；後端摘要統計（`summary.rs`）不讀取此值，仍採內建醫學標準。
+/// 自 schema 4 起不持久化，改由「血糖標準值設定」工作表即時衍生。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EventThreshold {
     pub label: String,
@@ -21,6 +24,7 @@ pub const BUILTIN_EVENT_LABELS: [&str; 6] =
 /// 「第一個偏高值」以符合臨床慣例：餐後/睡前 `high = 140`（140 判高）、空腹
 /// `high = 100`、餐前 `high = 101`。後端摘要統計（`summary.rs`）仍用
 /// `GlucoseRecord::classify()` 的內建醫學標準，不讀取此值。
+/// 用於本機 CSV（未連結 Sheet）時的退回預設，以及 settings_loader 驗證。
 /// 回傳 `Vec` 而非 `const`，因 `EventThreshold.label` 為 `String` 無法在 const 上下文建構。
 pub fn builtin_event_thresholds() -> Vec<EventThreshold> {
     vec![
@@ -57,10 +61,17 @@ pub fn builtin_event_thresholds() -> Vec<EventThreshold> {
     ]
 }
 
-/// 目前設定檔 schema 版本。新增 `event_thresholds` 欄位時由 2 升至 3。
-pub const CURRENT_SCHEMA_VERSION: u32 = 3;
+/// 目前設定檔 schema 版本。schema 4：移除持久化的 `custom_events`/
+/// `event_thresholds`，改存「事件關鍵字設定」與「血糖標準值設定」兩個工作表
+/// 名稱；該兩項設定改由 Google Sheet 工作表即時衍生，不再寫入本機 JSON。
+pub const CURRENT_SCHEMA_VERSION: u32 = 4;
 
-/// 自訂事件後端固定 fallback 顯示標準（不影響摘要，僅供解析預設）。
+/// 「事件關鍵字設定」工作表的預設名稱。
+pub const DEFAULT_EVENT_KEYWORDS_SHEET_NAME: &str = "事件關鍵字設定";
+/// 「血糖標準值設定」工作表的預設名稱。
+pub const DEFAULT_GLUCOSE_STANDARDS_SHEET_NAME: &str = "血糖標準值設定";
+
+/// 自訂事件後端固定 fallback 顯示標準（事件關鍵字未列於「血糖標準值設定」時用）。
 pub const CUSTOM_EVENT_FALLBACK_LOW: i32 = 70;
 pub const CUSTOM_EVENT_FALLBACK_HIGH: i32 = 139;
 
@@ -73,13 +84,14 @@ pub struct LocalConfiguration {
     pub fixture_path: Option<String>,
     pub credential_reference: Option<String>,
     pub last_successful_sync_at: Option<String>,
-    /// 使用者自訂事件關鍵字。舊設定檔（v1）無此欄位時回退為空 list。
+    /// 「事件關鍵字設定」工作表名稱。舊設定檔（schema ≤3）無此欄位時回退 None，
+    /// 由 `normalize()` 補上 `DEFAULT_EVENT_KEYWORDS_SHEET_NAME`。
     #[serde(default)]
-    pub custom_events: Vec<CustomEventConfig>,
-    /// 每個事件的前端顯示標準範圍。舊設定檔（v2）無此欄位時回退為空 list，
-    /// 由 `normalize()` 補齊內建預設值。
+    pub event_keywords_sheet_name: Option<String>,
+    /// 「血糖標準值設定」工作表名稱。舊設定檔（schema ≤3）無此欄位時回退 None，
+    /// 由 `normalize()` 補上 `DEFAULT_GLUCOSE_STANDARDS_SHEET_NAME`。
     #[serde(default)]
-    pub event_thresholds: Vec<EventThreshold>,
+    pub glucose_standards_sheet_name: Option<String>,
 }
 
 impl LocalConfiguration {
@@ -87,50 +99,45 @@ impl LocalConfiguration {
         self.sheet_id.is_some() || self.fixture_path.is_some()
     }
 
-    /// 正規化設定：補齊缺失的內建閾值、去重、固定順序（6 內建在前，自訂在後），
-    /// 並將 schema_version 升至目前版本。用於舊設定檔 migration（schema 2→3）與
-    /// 新設定寫入前的整備。
+    /// 正規化設定：補齊缺失的兩個工作表名稱（空白或 None → 預設常數）、
+    /// 將 schema_version 升至目前版本。自 schema 4 起不再處理
+    /// `custom_events`/`event_thresholds`（該兩項改由 Sheet 即時衍生，不持久化）。
+    /// 舊設定檔中殘留的 `custom_events`/`event_thresholds` 欄位會被 Serde 忽略，
+    /// 下次 save 即消失（依憲法不保留 Sheet 衍生資料）。
     pub fn normalize(&mut self) {
-        // 若 event_thresholds 缺少任一內建事件，補上預設值。
-        for builtin in builtin_event_thresholds() {
-            if !self
-                .event_thresholds
-                .iter()
-                .any(|t| t.label == builtin.label)
-            {
-                self.event_thresholds.push(builtin);
-            }
+        if self
+            .event_keywords_sheet_name
+            .as_deref()
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true)
+        {
+            self.event_keywords_sheet_name = Some(DEFAULT_EVENT_KEYWORDS_SHEET_NAME.to_string());
+        } else {
+            self.event_keywords_sheet_name = Some(
+                self.event_keywords_sheet_name
+                    .clone()
+                    .unwrap()
+                    .trim()
+                    .to_string(),
+            );
         }
-        // Migration：舊設定（schema 2）自訂事件閾值存於 custom_events，搬到
-        // event_thresholds 作為前端顯示標準來源，避免使用者原設標準遺失。
-        // 同 label 已存在於 event_thresholds 則以現有為準（不覆蓋使用者新設定）。
-        for c in &self.custom_events {
-            if !self.event_thresholds.iter().any(|t| t.label == c.label) {
-                self.event_thresholds.push(EventThreshold {
-                    label: c.label.clone(),
-                    low: c.low_threshold,
-                    high: c.high_threshold,
-                });
-            }
+        if self
+            .glucose_standards_sheet_name
+            .as_deref()
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(true)
+        {
+            self.glucose_standards_sheet_name =
+                Some(DEFAULT_GLUCOSE_STANDARDS_SHEET_NAME.to_string());
+        } else {
+            self.glucose_standards_sheet_name = Some(
+                self.glucose_standards_sheet_name
+                    .clone()
+                    .unwrap()
+                    .trim()
+                    .to_string(),
+            );
         }
-        // 去重：保留每個 label 第一次出現的項目。
-        let mut seen: Vec<String> = Vec::new();
-        self.event_thresholds.retain(|t| {
-            if seen.iter().any(|s| s == &t.label) {
-                false
-            } else {
-                seen.push(t.label.clone());
-                true
-            }
-        });
-        // 固定順序：6 內建在前（依 BUILTIN_EVENT_LABELS 順序），其餘自訂在後（依現有順序）。
-        self.event_thresholds.sort_by_key(|t| {
-            BUILTIN_EVENT_LABELS
-                .iter()
-                .position(|label| label == &t.label)
-                .map(|i| (0, i))
-                .unwrap_or((1, 0))
-        });
         if self.schema_version < CURRENT_SCHEMA_VERSION {
             self.schema_version = CURRENT_SCHEMA_VERSION;
         }
@@ -141,17 +148,22 @@ impl LocalConfiguration {
 mod tests {
     use super::*;
 
-    fn threshold(label: &str, low: i32, high: i32) -> EventThreshold {
-        EventThreshold {
-            label: label.into(),
-            low,
-            high,
+    fn empty_config() -> LocalConfiguration {
+        LocalConfiguration {
+            schema_version: 0,
+            sheet_id: None,
+            sheet_gid: None,
+            sheet_name: None,
+            fixture_path: None,
+            credential_reference: None,
+            last_successful_sync_at: None,
+            event_keywords_sheet_name: None,
+            glucose_standards_sheet_name: None,
         }
     }
 
     #[test]
     fn builtin_thresholds_match_classify_rules() {
-        // 餐後/睡前 high=139：140 應被前端判為高（value > high）。
         let builtins = builtin_event_thresholds();
         assert_eq!(builtins.len(), 6);
         for t in &builtins {
@@ -164,200 +176,107 @@ mod tests {
     }
 
     #[test]
-    fn normalize_adds_missing_builtin_thresholds() {
-        let mut config = LocalConfiguration {
-            schema_version: 2,
-            sheet_id: Some("ABC".into()),
-            sheet_gid: None,
-            sheet_name: Some("Sheet1".into()),
-            fixture_path: None,
-            credential_reference: None,
-            last_successful_sync_at: None,
-            custom_events: Vec::new(),
-            event_thresholds: Vec::new(),
-        };
+    fn normalize_fills_default_worksheet_names() {
+        let mut config = empty_config();
         config.normalize();
-        // 6 內建全部補齊。
-        assert_eq!(config.event_thresholds.len(), 6);
-        assert_eq!(config.event_thresholds[0].label, "空腹血糖");
+        assert_eq!(
+            config.event_keywords_sheet_name.as_deref(),
+            Some(DEFAULT_EVENT_KEYWORDS_SHEET_NAME)
+        );
+        assert_eq!(
+            config.glucose_standards_sheet_name.as_deref(),
+            Some(DEFAULT_GLUCOSE_STANDARDS_SHEET_NAME)
+        );
         assert_eq!(config.schema_version, CURRENT_SCHEMA_VERSION);
     }
 
     #[test]
-    fn normalize_preserves_user_overrides_and_order() {
-        let mut config = LocalConfiguration {
-            schema_version: 2,
-            sheet_id: None,
-            sheet_gid: None,
-            sheet_name: None,
-            fixture_path: None,
-            credential_reference: None,
-            last_successful_sync_at: None,
-            custom_events: Vec::new(),
-            event_thresholds: vec![
-                // 使用者把空腹改成 70/110；順序刻意打亂。
-                threshold("空腹血糖", 70, 110),
-                // 自訂事件在前。
-                threshold("運動後", 80, 120),
-            ],
-        };
+    fn normalize_preserves_explicit_worksheet_names_and_trims() {
+        let mut config = empty_config();
+        config.event_keywords_sheet_name = Some("  我的關鍵字  ".into());
+        config.glucose_standards_sheet_name = Some("我的標準值".into());
         config.normalize();
-        // 內建在前、自訂在後；使用者覆蓋值保留。
-        assert_eq!(config.event_thresholds[0], threshold("空腹血糖", 70, 110));
         assert_eq!(
-            config.event_thresholds.iter().find(|t| t.label == "午餐前"),
-            Some(&threshold("午餐前", 70, 101))
+            config.event_keywords_sheet_name.as_deref(),
+            Some("我的關鍵字")
         );
         assert_eq!(
-            config.event_thresholds.last(),
-            Some(&threshold("運動後", 80, 120))
+            config.glucose_standards_sheet_name.as_deref(),
+            Some("我的標準值")
         );
     }
 
     #[test]
-    fn normalize_deduplicates_by_label() {
-        let mut config = LocalConfiguration {
-            schema_version: 3,
-            sheet_id: None,
-            sheet_gid: None,
-            sheet_name: None,
-            fixture_path: None,
-            credential_reference: None,
-            last_successful_sync_at: None,
-            custom_events: Vec::new(),
-            event_thresholds: vec![
-                threshold("空腹血糖", 70, 110),
-                threshold("空腹血糖", 70, 99), // 重複，應被丟棄
-            ],
-        };
+    fn normalize_treats_blank_names_as_missing() {
+        let mut config = empty_config();
+        config.event_keywords_sheet_name = Some("   ".into());
+        config.glucose_standards_sheet_name = Some("".into());
         config.normalize();
-        let fasting = config
-            .event_thresholds
-            .iter()
-            .filter(|t| t.label == "空腹血糖")
-            .count();
-        assert_eq!(fasting, 1);
-        // 保留第一次出現的值。
         assert_eq!(
-            config
-                .event_thresholds
-                .iter()
-                .find(|t| t.label == "空腹血糖"),
-            Some(&threshold("空腹血糖", 70, 110))
+            config.event_keywords_sheet_name.as_deref(),
+            Some(DEFAULT_EVENT_KEYWORDS_SHEET_NAME)
+        );
+        assert_eq!(
+            config.glucose_standards_sheet_name.as_deref(),
+            Some(DEFAULT_GLUCOSE_STANDARDS_SHEET_NAME)
         );
     }
 
     #[test]
     fn normalize_does_not_downgrade_schema_version() {
-        let mut config = LocalConfiguration {
-            schema_version: CURRENT_SCHEMA_VERSION,
-            sheet_id: None,
-            sheet_gid: None,
-            sheet_name: None,
-            fixture_path: None,
-            credential_reference: None,
-            last_successful_sync_at: None,
-            custom_events: Vec::new(),
-            event_thresholds: Vec::new(),
-        };
+        let mut config = empty_config();
+        config.schema_version = CURRENT_SCHEMA_VERSION;
         config.normalize();
         assert_eq!(config.schema_version, CURRENT_SCHEMA_VERSION);
     }
 
     #[test]
-    fn normalize_sorts_builtins_before_custom() {
-        let mut config = LocalConfiguration {
-            schema_version: 3,
-            sheet_id: None,
-            sheet_gid: None,
-            sheet_name: None,
-            fixture_path: None,
-            credential_reference: None,
-            last_successful_sync_at: None,
-            custom_events: Vec::new(),
-            // 自訂在前、內建散落其後。
-            event_thresholds: vec![
-                threshold("運動後", 70, 139),
-                threshold("睡前", 70, 139),
-                threshold("空腹血糖", 70, 99),
-            ],
-        };
+    fn normalize_upgrades_old_schema_to_4() {
+        let mut config = empty_config();
+        config.schema_version = 3;
         config.normalize();
-        let labels: Vec<&str> = config
-            .event_thresholds
-            .iter()
-            .map(|t| t.label.as_str())
-            .collect();
-        // 內建依 BUILTIN_EVENT_LABELS 順序在前，自訂在後。
-        assert_eq!(labels[0], "空腹血糖");
-        assert_eq!(labels[1], "午餐前");
-        assert_eq!(labels[2], "午餐後");
-        assert_eq!(labels[3], "晚餐前");
-        assert_eq!(labels[4], "晚餐後");
-        assert_eq!(labels[5], "睡前");
-        assert_eq!(labels[6], "運動後");
+        assert_eq!(config.schema_version, 4);
     }
 
     #[test]
-    fn normalize_migrates_custom_event_thresholds() {
-        // 舊設定（schema 2）：自訂事件閾值存於 custom_events，event_thresholds 為空。
-        let mut config = LocalConfiguration {
-            schema_version: 2,
-            sheet_id: None,
-            sheet_gid: None,
-            sheet_name: None,
-            fixture_path: None,
-            credential_reference: None,
-            last_successful_sync_at: None,
-            custom_events: vec![CustomEventConfig {
-                label: "運動後".into(),
-                low_threshold: 80,
-                high_threshold: 120,
-            }],
-            event_thresholds: Vec::new(),
-        };
+    fn old_json_with_legacy_vectors_is_ignored() {
+        // 模擬 schema 3 舊設定檔仍含 custom_events/event_thresholds（應被忽略）。
+        let json = r#"{
+            "schema_version": 3,
+            "sheet_id": "ABC",
+            "sheet_gid": null,
+            "sheet_name": "Sheet1",
+            "fixture_path": null,
+            "credential_reference": null,
+            "last_successful_sync_at": null,
+            "custom_events": [{"label":"運動後","low_threshold":80,"high_threshold":120}],
+            "event_thresholds": [{"label":"空腹血糖","low":70,"high":99}]
+        }"#;
+        let mut config: LocalConfiguration = serde_json::from_str(json).unwrap();
         config.normalize();
-        // 自訂事件閾值應搬到 event_thresholds，使用者原設標準保留。
-        let sport = config
-            .event_thresholds
-            .iter()
-            .find(|t| t.label == "運動後")
-            .unwrap();
-        assert_eq!((sport.low, sport.high), (80, 120));
-        // 6 內建亦補齊。
-        assert_eq!(config.event_thresholds.len(), 7);
-    }
-
-    #[test]
-    fn normalize_does_not_overwrite_existing_threshold_from_custom_events() {
-        // event_thresholds 已有「運動後」新設值，custom_events 的舊閾值不應覆蓋。
-        let mut config = LocalConfiguration {
-            schema_version: 3,
-            sheet_id: None,
-            sheet_gid: None,
-            sheet_name: None,
-            fixture_path: None,
-            credential_reference: None,
-            last_successful_sync_at: None,
-            custom_events: vec![CustomEventConfig {
-                label: "運動後".into(),
-                low_threshold: 80,
-                high_threshold: 120,
-            }],
-            event_thresholds: vec![threshold("運動後", 70, 139)],
-        };
-        config.normalize();
-        let sport = config
-            .event_thresholds
-            .iter()
-            .find(|t| t.label == "運動後")
-            .unwrap();
-        assert_eq!((sport.low, sport.high), (70, 139));
+        // 工作表名補預設、schema 升 4。
+        assert_eq!(config.schema_version, 4);
+        assert_eq!(
+            config.event_keywords_sheet_name.as_deref(),
+            Some(DEFAULT_EVENT_KEYWORDS_SHEET_NAME)
+        );
+        assert_eq!(
+            config.glucose_standards_sheet_name.as_deref(),
+            Some(DEFAULT_GLUCOSE_STANDARDS_SHEET_NAME)
+        );
+        // 舊欄位不持久化：序列化後不應出現 custom_events/event_thresholds。
+        let persisted = serde_json::to_string(&config).unwrap();
+        assert!(!persisted.contains("custom_events"));
+        assert!(!persisted.contains("event_thresholds"));
     }
 
     #[test]
     fn event_threshold_serializes_with_expected_fields() {
-        let t = threshold("空腹血糖", 70, 99);
+        let t = EventThreshold {
+            label: "空腹血糖".into(),
+            low: 70,
+            high: 99,
+        };
         let json = serde_json::to_string(&t).unwrap();
         assert_eq!(json, r#"{"label":"空腹血糖","low":70,"high":99}"#);
     }

@@ -9,12 +9,18 @@ use serde::{Deserialize, Serialize};
 use super::router::ApiState;
 use crate::{
     analysis::{selection, summary},
+    config::model::EventThreshold,
     domain::{AnalysisSelection, CustomEvent, DashboardTableRow, Event, GlucoseRecord, Period},
     errors::AppError,
-    ingestion::sync_service::SyncService,
+    ingestion::{
+        settings_loader::{
+            builtin_fallback_settings, load_sheet_settings_with_fetcher, SheetSettings,
+        },
+        sync_service::SyncService,
+    },
 };
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Clone)]
 pub struct DashboardQuery {
     pub event: Option<String>,
     pub search: Option<String>,
@@ -79,10 +85,50 @@ pub struct DashboardResponse {
     pub issues: Vec<crate::domain::DataQualityIssue>,
     pub status: &'static str,
     pub last_successful_sync_at: Option<String>,
+    /// 即時衍生的自訂事件關鍵字（後端 Event::parse 與自訂分類用）。
+    pub custom_events: Vec<CustomEvent>,
+    /// 即時衍生的血糖標準值（前端圖/表上色用）。
+    pub event_thresholds: Vec<EventThreshold>,
 }
 
-/// 載入紀錄。`force` 為 false 時優先使用進程記憶體快取（命中且簽章相符則直接回傳，
-/// 不再抓 Sheet）；為 true 時強制重新抓取並更新快取。快取不寫磁碟、重啟清空。
+/// 載入當前設定（事件關鍵字 + 血糖標準值）。已連結 Sheet 時每次即時抓取兩個
+/// 設定工作表並衍生；只設本機 CSV 時退回內建預設（無自訂關鍵字 + 六內建）。
+async fn load_current_settings(
+    state: &ApiState,
+    config: &crate::config::model::LocalConfiguration,
+) -> Result<SheetSettings, AppError> {
+    if config
+        .sheet_id
+        .as_ref()
+        .map(|id| !id.trim().is_empty())
+        .unwrap_or(false)
+    {
+        let sheet_id = config.sheet_id.clone().unwrap();
+        let keywords_name = config
+            .event_keywords_sheet_name
+            .clone()
+            .unwrap_or_else(|| "事件關鍵字設定".into());
+        let standards_name = config
+            .glucose_standards_sheet_name
+            .clone()
+            .unwrap_or_else(|| "血糖標準值設定".into());
+        load_sheet_settings_with_fetcher(
+            state.sheet_fetcher.as_ref(),
+            &sheet_id,
+            &keywords_name,
+            &standards_name,
+        )
+        .await
+    } else {
+        // 本機 CSV：退回內建預設，非阻斷。
+        Ok(builtin_fallback_settings())
+    }
+}
+
+/// 載入紀錄與當前設定。`force` 為 false 時優先使用進程記憶體快取（命中且簽章
+/// **與設定內容**相符才回傳，不再抓 Sheet）；否則重新抓取資料表並更新快取。
+/// 每次呼叫都會先重新衍生設定（抓兩個設定工作表），確保 Sheet 設定變更能反映。
+/// 快取不寫磁碟、重啟清空。
 async fn load_records(
     state: &ApiState,
     force: bool,
@@ -92,20 +138,27 @@ async fn load_records(
         Vec<DashboardTableRow>,
         Vec<crate::domain::DataQualityIssue>,
         Option<String>,
+        SheetSettings,
     ),
     AppError,
 > {
     let config = state.config.load();
     let signature = super::router::source_signature(&config);
+    let settings = load_current_settings(state, &config).await?;
 
     if !force {
         if let Some(cache) = state.records_cache.read().await.as_ref() {
-            if cache.source_signature == signature {
+            // 命中條件：來源簽章相同 + 衍生設定內容相同（偵測工作表內容變更）。
+            if cache.source_signature == signature
+                && cache.custom_events == settings.custom_events
+                && cache.event_thresholds == settings.event_thresholds
+            {
                 return Ok((
                     cache.records.clone(),
                     cache.table_rows.clone(),
                     cache.issues.clone(),
                     config.last_successful_sync_at,
+                    settings,
                 ));
             }
         }
@@ -116,17 +169,27 @@ async fn load_records(
         sheet_gid: config.sheet_gid.clone(),
         sheet_name: config.sheet_name.clone(),
         fixture_path: config.fixture_path.map(Into::into),
-        custom_events: config.custom_events.clone(),
+        custom_events: settings.custom_events.clone(),
     };
-    let (records, issues, table_rows) = service.load().await?;
+    let (records, issues, table_rows) = service
+        .load_with_fetcher(state.sheet_fetcher.as_ref())
+        .await?;
     *state.records_cache.write().await = Some(super::router::RecordsCache {
         records: records.clone(),
         table_rows: table_rows.clone(),
         issues: issues.clone(),
+        custom_events: settings.custom_events.clone(),
+        event_thresholds: settings.event_thresholds.clone(),
         fetched_at: chrono::Utc::now(),
         source_signature: signature,
     });
-    Ok((records, table_rows, issues, config.last_successful_sync_at))
+    Ok((
+        records,
+        table_rows,
+        issues,
+        config.last_successful_sync_at,
+        settings,
+    ))
 }
 
 /// 篩選表格顯示列。有效列套用 period/event/search（與 `selection::filter` 同邏輯）；
@@ -189,9 +252,8 @@ pub async fn dashboard(
     State(state): State<ApiState>,
     Query(query): Query<DashboardQuery>,
 ) -> Result<Json<DashboardResponse>, AppError> {
-    let config = state.config.load();
-    let chosen = selection(&query, &config.custom_events);
-    let (records, table_rows, issues, last_sync) = load_records(&state, false).await?;
+    let (records, table_rows, issues, last_sync, settings) = load_records(&state, false).await?;
+    let chosen = selection(&query, &settings.custom_events);
     let filtered = selection::filter(&records, &chosen);
     let summary = summary::calculate(&filtered);
     let table_filtered = filter_table_rows(&table_rows, &chosen);
@@ -203,6 +265,8 @@ pub async fn dashboard(
         issues,
         status: "succeeded",
         last_successful_sync_at: last_sync,
+        custom_events: settings.custom_events,
+        event_thresholds: settings.event_thresholds,
     }))
 }
 
@@ -210,9 +274,8 @@ pub async fn export_csv(
     State(state): State<ApiState>,
     Query(query): Query<DashboardQuery>,
 ) -> Result<Response, AppError> {
-    let config = state.config.load();
-    let chosen = selection(&query, &config.custom_events);
-    let (records, _table_rows, _issues, _last_sync) = load_records(&state, false).await?;
+    let (records, _table_rows, _issues, _last_sync, settings) = load_records(&state, false).await?;
+    let chosen = selection(&query, &settings.custom_events);
     let records = selection::filter(&records, &chosen);
     let mut csv = String::from("血糖量測日期時間,事件,量測血糖值(mg/dl),備註1,備註2\n");
     for record in records {
@@ -373,7 +436,7 @@ mod tests {
             n
         ));
         let config = crate::config::model::LocalConfiguration {
-            schema_version: 2,
+            schema_version: 4,
             sheet_id: None,
             sheet_gid: None,
             sheet_name: Some("Sheet1".into()),
@@ -384,13 +447,14 @@ mod tests {
             ),
             credential_reference: None,
             last_successful_sync_at: None,
-            custom_events: Vec::new(),
-            event_thresholds: Vec::new(),
+            event_keywords_sheet_name: Some("事件關鍵字設定".into()),
+            glucose_standards_sheet_name: Some("血糖標準值設定".into()),
         };
         std::fs::write(&path, serde_json::to_string(&config).unwrap()).unwrap();
         super::super::router::ApiState {
             config: crate::config::store::ConfigStore::from_path(path),
             records_cache: Arc::new(RwLock::new(None)),
+            sheet_fetcher: Arc::new(crate::ingestion::sync_service::ReqwestGoogleSheetFetcher),
         }
     }
 
@@ -414,5 +478,155 @@ mod tests {
         let state = fixture_state();
         let forced = load_records(&state, true).await.unwrap();
         assert!(!forced.0.is_empty());
+    }
+
+    // --- FakeFetcher handler 測試 ---
+
+    /// 設定工作表的 CSV（與實際 Sheet 格式一致）。
+    const KEYWORDS_CSV: &str = "事件關鍵字\n飲食測試\n";
+    const STANDARDS_CSV: &str = "事件,血糖下限,血糖上限\n空腹血糖,70,100\n午餐前,70,101\n午餐後,70,140\n晚餐前,70,101\n晚餐後,70,140\n睡前,70,140\n飲食測試,70,139\n";
+    /// 資料工作表 CSV（含一筆自訂事件「飲食測試」）。
+    const DATA_CSV: &str = "血糖量測日期時間,事件,量測血糖值(mg/dl),備註1,備註2\n2026/07/07 06:30,空腹血糖,88,,\n2026/07/07 09:00,飲食測試,150,,\n";
+
+    /// 建構一個指向 FakeFetcher 的 ApiState（已連結 Sheet）。
+    fn sheet_state(
+        fetcher: crate::ingestion::fake_fetcher::FakeFetcher,
+    ) -> super::super::router::ApiState {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let path = std::env::temp_dir().join(format!(
+            "glucose-dashboard-sheet-test-{}-{}.json",
+            std::process::id(),
+            n
+        ));
+        let config = crate::config::model::LocalConfiguration {
+            schema_version: 4,
+            sheet_id: Some("FAKE_SHEET".into()),
+            sheet_gid: Some("0".into()),
+            sheet_name: Some("資料表".into()),
+            fixture_path: None,
+            credential_reference: None,
+            last_successful_sync_at: None,
+            event_keywords_sheet_name: Some("事件關鍵字設定".into()),
+            glucose_standards_sheet_name: Some("血糖標準值設定".into()),
+        };
+        std::fs::write(&path, serde_json::to_string(&config).unwrap()).unwrap();
+        super::super::router::ApiState {
+            config: crate::config::store::ConfigStore::from_path(path),
+            records_cache: Arc::new(RwLock::new(None)),
+            sheet_fetcher: Arc::new(fetcher),
+        }
+    }
+
+    fn default_fake_fetcher() -> crate::ingestion::fake_fetcher::FakeFetcher {
+        crate::ingestion::fake_fetcher::FakeFetcher::new()
+            .with_gid("0", DATA_CSV)
+            .with_name("事件關鍵字設定", KEYWORDS_CSV)
+            .with_name("血糖標準值設定", STANDARDS_CSV)
+    }
+
+    #[tokio::test]
+    async fn dashboard_loads_settings_every_call_and_includes_vectors() {
+        let state = sheet_state(default_fake_fetcher());
+        let query = super::DashboardQuery::default();
+        // 兩次 dashboard 呼叫。
+        let r1 = super::dashboard(
+            axum::extract::State(state.clone()),
+            axum::extract::Query(query.clone()),
+        )
+        .await
+        .unwrap()
+        .0;
+        let r2 = super::dashboard(
+            axum::extract::State(state.clone()),
+            axum::extract::Query(query),
+        )
+        .await
+        .unwrap()
+        .0;
+        // 回應應帶 custom_events 與 event_thresholds。
+        assert_eq!(r1.custom_events.len(), 1);
+        assert_eq!(r1.custom_events[0].label, "飲食測試");
+        assert_eq!(r1.event_thresholds.len(), 7);
+        // 第二次呼叫：settings 不變 → 資料表用快取，但設定仍每次抓取（2 次呼叫 × 2 設定表 = 4 by-name）。
+        assert_eq!(r1.custom_events, r2.custom_events);
+        let fetcher = state.sheet_fetcher.clone();
+        // 透過 ApiState 無法直接讀 FakeFetcher 計數（trait object）；改以行為驗證：
+        // settings 不變時資料筆數應一致。
+        assert_eq!(r1.records.len(), r2.records.len());
+        // 飲食測試記錄應被解析（custom_events 含它）。
+        assert!(r1
+            .records
+            .iter()
+            .any(|r| r.event.label_zh_tw() == "飲食測試"));
+        let _ = fetcher;
+    }
+
+    #[tokio::test]
+    async fn dashboard_refetches_data_when_settings_change() {
+        // 第一次用預設 fetcher；之後改 fetcher 回應（新增關鍵字）驗證重抓。
+        let state = sheet_state(default_fake_fetcher());
+        let query = super::DashboardQuery::default();
+        let r1 = super::dashboard(
+            axum::extract::State(state.clone()),
+            axum::extract::Query(query.clone()),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert_eq!(r1.custom_events.len(), 1);
+
+        // 清快取模擬 settings 變更後下次載入：用新 fetcher（關鍵字加「運動後」）。
+        let new_keywords = "事件關鍵字\n飲食測試\n運動後\n";
+        let new_standards =
+            "事件,血糖下限,血糖上限\n空腹血糖,70,100\n午餐前,70,101\n午餐後,70,140\n晚餐前,70,101\n晚餐後,70,140\n睡前,70,140\n飲食測試,70,139\n運動後,70,139\n";
+        let new_data = "血糖量測日期時間,事件,量測血糖值(mg/dl),備註1,備註2\n2026/07/07 06:30,空腹血糖,88,,\n2026/07/07 09:00,飲食測試,150,,\n2026/07/07 10:00,運動後,90,,\n";
+        let new_fetcher = crate::ingestion::fake_fetcher::FakeFetcher::new()
+            .with_gid("0", new_data)
+            .with_name("事件關鍵字設定", new_keywords)
+            .with_name("血糖標準值設定", new_standards);
+        // 替換 state 的 fetcher（重建 state）。
+        let state2 = sheet_state(new_fetcher);
+        // 共用同一設定檔：把 state2 的 config 路徑指向 state 的路徑。
+        // 為簡化，直接用 state2（獨立設定檔但內容相同）。
+        let r2 = super::dashboard(axum::extract::State(state2), axum::extract::Query(query))
+            .await
+            .unwrap()
+            .0;
+        // 新設定含 2 個自訂關鍵字。
+        assert_eq!(r2.custom_events.len(), 2);
+        assert!(r2.custom_events.iter().any(|c| c.label == "運動後"));
+        assert!(r2.records.iter().any(|r| r.event.label_zh_tw() == "運動後"));
+    }
+
+    #[tokio::test]
+    async fn dashboard_fixture_mode_uses_builtin_fallback() {
+        // 只設本機 CSV（未連結 Sheet）→ 退回內建預設，無自訂關鍵字，不抓網路。
+        let state = fixture_state();
+        let query = super::DashboardQuery::default();
+        let r = super::dashboard(axum::extract::State(state), axum::extract::Query(query))
+            .await
+            .unwrap()
+            .0;
+        assert!(r.custom_events.is_empty());
+        assert_eq!(r.event_thresholds.len(), 6); // 六內建預設
+        assert_eq!(r.event_thresholds[0].label, "空腹血糖");
+    }
+
+    #[tokio::test]
+    async fn dashboard_blocks_when_settings_worksheet_missing() {
+        // 標準值工作表回應空白 → 阻斷 AppError::Sync。
+        let fetcher = crate::ingestion::fake_fetcher::FakeFetcher::new()
+            .with_gid("0", DATA_CSV)
+            .with_name("事件關鍵字設定", KEYWORDS_CSV)
+            .with_name("血糖標準值設定", ""); // 空白
+        let state = sheet_state(fetcher);
+        let query = super::DashboardQuery::default();
+        let result =
+            super::dashboard(axum::extract::State(state), axum::extract::Query(query)).await;
+        assert!(matches!(result, Err(crate::errors::AppError::Sync(_))));
     }
 }

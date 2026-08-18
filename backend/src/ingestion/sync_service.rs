@@ -2,10 +2,56 @@ use std::path::PathBuf;
 
 use super::sheet_parser::parse_csv;
 use crate::{
-    config::service::normalize_sheet_reference,
     domain::{CustomEvent, DashboardTableRow, DataQualityIssue, GlucoseRecord},
     errors::AppError,
 };
+
+/// Google Sheet 單次抓取結果。供設定載入與資料載入共用。
+#[derive(Clone, Debug)]
+pub struct GoogleSheetFetch {
+    pub body: String,
+    pub status: reqwest::StatusCode,
+    pub url: String,
+    pub message: String,
+    pub detail: Option<String>,
+}
+
+/// 可注入的 Google Sheet 抓取器。生產環境用 `ReqwestGoogleSheetFetcher`，
+/// 測試用 fake 實作（對應工作表名/gid 回傳預先準備的 CSV 字串），讓 handler
+/// 與 settings_loader 測試不需連線 Google。
+///
+/// 使用 boxed future（非 async-trait）以避免新增依賴；回傳的 Future 借用
+/// `&self` 與傳入字串（生命週期 `'a`）。
+pub trait GoogleSheetFetcher: Send + Sync {
+    /// 依 sheet_id + (gid 或 sheet_name) 抓取一個工作表的 CSV 文字。
+    /// `sheet_gid` 優先（走 `/export?format=csv&gid=...`）；否則以 `sheet_name`
+    /// 走 gviz（`/gviz/tq?tqx=out:csv&sheet=...`）。
+    fn fetch_csv<'a>(
+        &'a self,
+        sheet_id: &'a str,
+        sheet_gid: Option<&'a str>,
+        sheet_name: &'a str,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<GoogleSheetFetch, AppError>> + Send + 'a>,
+    >;
+}
+
+/// 生產環境的 reqwest 抓取器，沿用原 `fetch_google_sheet_csv` 的 URL 與行為。
+#[derive(Clone, Default)]
+pub struct ReqwestGoogleSheetFetcher;
+
+impl GoogleSheetFetcher for ReqwestGoogleSheetFetcher {
+    fn fetch_csv<'a>(
+        &'a self,
+        sheet_id: &'a str,
+        sheet_gid: Option<&'a str>,
+        sheet_name: &'a str,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<GoogleSheetFetch, AppError>> + Send + 'a>,
+    > {
+        Box::pin(async move { fetch_google_sheet_csv(sheet_id, sheet_gid, sheet_name).await })
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct SyncService {
@@ -16,23 +62,12 @@ pub struct SyncService {
     pub custom_events: Vec<CustomEvent>,
 }
 
-#[derive(Clone, Debug, serde::Serialize)]
-pub struct ConnectionReport {
-    pub ok: bool,
-    pub sheet_id: Option<String>,
-    pub sheet_gid: Option<String>,
-    pub sheet_name: Option<String>,
-    pub url: Option<String>,
-    pub http_status: Option<u16>,
-    pub record_count: Option<usize>,
-    pub issue_count: Option<usize>,
-    pub message: String,
-    pub detail: Option<String>,
-}
-
 impl SyncService {
-    pub async fn load(
+    /// 載入資料工作表並解析。`fetcher` 注入以利測試；生產呼叫端用
+    /// `ReqwestGoogleSheetFetcher`（可用 `load()` 包裝）。fixture 路徑不走網路。
+    pub async fn load_with_fetcher(
         &self,
+        fetcher: &dyn GoogleSheetFetcher,
     ) -> Result<
         (
             Vec<GlucoseRecord>,
@@ -52,8 +87,9 @@ impl SyncService {
             let sheet_id = self.sheet_id.clone().unwrap();
             let sheet_gid = self.sheet_gid.clone();
             let sheet_name = self.sheet_name.clone().unwrap_or_else(|| "Sheet1".into());
-            let response =
-                fetch_google_sheet_csv(&sheet_id, sheet_gid.as_deref(), &sheet_name).await?;
+            let response = fetcher
+                .fetch_csv(&sheet_id, sheet_gid.as_deref(), &sheet_name)
+                .await?;
             if !response.status.is_success() {
                 return Err(AppError::Sync(response.message));
             }
@@ -67,67 +103,25 @@ impl SyncService {
         Ok(parse_csv(&text, &self.custom_events))
     }
 
-    pub async fn test_google_sheet_connection(&self) -> Result<ConnectionReport, AppError> {
-        let raw_sheet_id = self
-            .sheet_id
-            .clone()
-            .ok_or_else(|| AppError::NotConfigured("尚未設定 Google Sheet。".into()))?;
-        let (sheet_id, parsed_gid) = normalize_sheet_reference(&raw_sheet_id)
-            .ok_or_else(|| AppError::NotConfigured("尚未設定 Google Sheet。".into()))?;
-        let sheet_gid = self.sheet_gid.clone().or(parsed_gid);
-        let sheet_name = self.sheet_name.clone().unwrap_or_else(|| "Sheet1".into());
-        let response = fetch_google_sheet_csv(&sheet_id, sheet_gid.as_deref(), &sheet_name).await?;
-        let (records, issues, _table_rows) = parse_csv(&response.body, &self.custom_events);
-        let parse_ok = response.status.is_success()
-            && !issues
-                .iter()
-                .any(|issue| issue.code == crate::domain::IssueCode::HeaderMismatch);
-        Ok(ConnectionReport {
-            ok: parse_ok,
-            sheet_id: Some(sheet_id),
-            sheet_gid,
-            sheet_name: Some(sheet_name),
-            url: Some(response.url),
-            http_status: Some(response.status.as_u16()),
-            record_count: Some(records.len()),
-            issue_count: Some(issues.len()),
-            message: if parse_ok {
-                "Google Sheet 可連線".into()
-            } else if !response.status.is_success() {
-                response.message.clone()
-            } else {
-                "已連上 Google，但回應內容不是可解析的 Sheet CSV。".into()
-            },
-            detail: response.detail.or_else(|| {
-                if issues.is_empty() {
-                    None
-                } else {
-                    Some(
-                        issues
-                            .into_iter()
-                            .map(|issue| {
-                                format!(
-                                    "第 {} 列：{}",
-                                    issue.source_row_number, issue.message_zh_tw
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join("；"),
-                    )
-                }
-            }),
-        })
+    /// 生產環境便捷包裝：用 `ReqwestGoogleSheetFetcher` 載入資料表。
+    /// 保留為公共 API；路由層已改用 `load_with_fetcher` 以注入測試 fetcher。
+    #[allow(dead_code)]
+    pub async fn load(
+        &self,
+    ) -> Result<
+        (
+            Vec<GlucoseRecord>,
+            Vec<DataQualityIssue>,
+            Vec<DashboardTableRow>,
+        ),
+        AppError,
+    > {
+        self.load_with_fetcher(&ReqwestGoogleSheetFetcher).await
     }
 }
 
-struct GoogleSheetFetch {
-    body: String,
-    status: reqwest::StatusCode,
-    url: String,
-    message: String,
-    detail: Option<String>,
-}
-
+/// 抓取單一 Google 工作表 CSV。`sheet_gid` 優先走 export URL；否則以 `sheet_name`
+/// 走 gviz URL。沿用既有 URL 規則。
 async fn fetch_google_sheet_csv(
     sheet_id: &str,
     sheet_gid: Option<&str>,
